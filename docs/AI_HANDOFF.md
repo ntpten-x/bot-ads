@@ -1,6 +1,6 @@
 # AI handoff และรูปแบบการพัฒนาระบบ
 
-เอกสารส่งต่องาน ณ 15 พฤศจิกายน 2026 อ้างอิง Extension 0.5.0 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+เอกสารส่งต่องาน ณ 15 พฤศจิกายน 2026 อ้างอิง Extension 0.6.0 (อัปเดตจาก 0.5.0 ในวันเดียวกัน) ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
 
 ## 1. เป้าหมายและขอบเขต
 
@@ -40,6 +40,7 @@ CSV → validate → quality report → transactional import / UPSERT → export
 | apps/api/src/server.ts | Auth, imports, export, command queue, device state และ diagnostic result |
 | apps/api/src/dashboard.ts | ข้อมูล dashboard, account summary, ประวัติคำสั่ง |
 | apps/api/src/store.ts | Transactions, UPSERT, parent integrity, import history |
+| apps/api/src/captures.ts | บันทึก DOM capture ทุก snapshot ลง PostgreSQL, ตรวจและยก (promote) แถวที่ยืนยันครบ, `/captures` endpoints |
 | apps/extension/src/background.ts | Device pairing, polling, jobs, checkpoints, dispatch |
 | apps/extension/src/reader.ts | อ่านตาราง/ข้อความ/บริบทและ raw row observations |
 | apps/extension/src/dom-control.ts | ตรวจเป้าหมายและทำ DOM actions แบบจำกัดชนิด |
@@ -48,6 +49,7 @@ CSV → validate → quality report → transactional import / UPSERT → export
 | packages/core/src/control.ts | Shared Zod command schemas และ URL/account guards |
 | packages/core/src/index.ts | CSV parsing, normalized import schema และ quality validation |
 | packages/core/src/analysis.ts, metrics.ts, capture-review.ts | วิเคราะห์ตามกฎและตรวจหลักฐาน capture |
+| packages/core/src/dom-capture.ts | Zod contract ของ snapshot, แปลงวันที่จากปุ่มช่วงวันที่, กฎ promote แถว DOM capture (pure, มี unit test) |
 | db | SQL migrations; insights_daily เป็น view ของ observation รายวันตามเงื่อนไข |
 | scripts | Build, migration, health และ CLI bot |
 | tests | Unit, API integration และ browser fixtures |
@@ -92,6 +94,18 @@ Shared command รองรับ start/pause/resume/status, ui.action, ui.navig
 - ตรวจ entity/date/metric coverage, relationship integrity และ reconciliation ภายใต้เงื่อนไขเดียวกัน ข้อมูลขาดต้องระบุรายการที่ขาด
 - จำนวนใน dashboard คือข้อมูล normalized ที่บันทึกไว้ ไม่ใช่จำนวนทั้งหมดใน Meta
 - มี pagination/virtualization/คอลัมน์นอกจอได้เสมอ `needs_review` หมายถึงยังต้องตรวจ ไม่ใช่เก็บครบ 100%
+
+### DOM capture ใน PostgreSQL (ตั้งแต่ 0.6.0)
+
+ทุก snapshot ที่ Extension ส่งมากับ device state ถูกบันทึกเป็น raw record อัตโนมัติ (`capture_jobs`, `capture_snapshots`, `capture_rows` ใน `db/003_dom_captures.sql`) ซ้ำได้ไม่เกินหนึ่งครั้งต่อ fingerprint จากนั้น `evaluateSnapshot` ตรวจทีละแถว แถวจะถูกยกเข้า campaigns/ad_sets/ads และ insight_observations (ผ่าน import_jobs ที่มี `data_quality_reports.report.source = "dom_capture"`) **เฉพาะเมื่อ**:
+
+- มี stable ID ตัวเลขจาก href ของลิงก์ในแถว (`selected_campaign_ids` / `selected_adset_ids` / `selected_ad_ids`) หรือจากคอลัมน์ ID ที่มองเห็น และไม่ซ้ำในภาพเดียวกัน ชื่อหรือพิกัดไม่ถูกใช้เป็น ID
+- ระดับลูกมี parent ID จาก href และ parent ถูกบันทึกแล้ว (แคมเปญแม่ต้องมีชื่อใน DB)
+- ช่วงวันที่แปลงได้จากปุ่มวันที่ที่มีวันที่ชัดเจน, สกุลเงินยืนยันจากสัญลักษณ์/รหัสที่ไม่กำกวม (`$` กำกวม), เขตเวลา IANA ที่มองเห็นบนหน้า หรือผู้ใช้ยืนยันเอง, attribution จากคอลัมน์ในแถวหรือผู้ใช้ยืนยัน, result type จากบรรทัดที่สองของเซลล์ผลลัพธ์หรือผู้ใช้ยืนยัน
+- column mapping เป็น `semantic` หรือ `verified_geometry` (ลิงก์ที่มี ID อยู่ในคอลัมน์ชื่อของแถวนั้น และ header/body scroll offset ตรงกัน)
+- spend และ impressions อ่านเป็นตัวเลขได้ ค่า `—` หรือข้อความยังคงหายไป ไม่กลายเป็น 0
+
+แถวอื่นอยู่ใน `needs_review` พร้อม reason codes DOM capture ไม่เขียนทับ observation ที่มาจาก CSV ใน grain เดียวกัน (`csv_observation_exists`) การนำเข้า CSV ยังทำงานเหมือนเดิมและยังเป็นทางหลักเมื่อหน้าไม่แสดงข้อมูลครบ ผลที่ยกขึ้นยังเป็น coverage `visible_only` ไม่ใช่ทั้งบัญชี
 
 เมื่อเพิ่ม schema ให้แก้ core validation, migration, store, API, web และ tests ที่เกี่ยวข้องให้สอดคล้องกัน เพิ่มไฟล์ migration ใหม่และเพิ่มชื่อใน scripts/migrate.ts เพราะปัจจุบันใช้รายการ explicit ไม่ได้ค้น SQL อัตโนมัติ อย่าแก้ migration ที่ฐานข้อมูลใช้ไปแล้ว
 
@@ -151,6 +165,7 @@ npm run dev:web
 | Core parsing/metrics/schema | typecheck + unit tests ที่ตรวจ invariant จริง |
 | API/store/migration | Unit ที่เกี่ยวข้อง + test:api บนฐานทดสอบที่กำหนด |
 | DOM reader | test:reader และ fixture ที่แสดง virtualization/column alignment |
+| DOM capture persistence/promotion | unit `tests/dom-capture.test.ts` + `npm run test:captures` (ต้องมี API/PostgreSQL; ใช้บัญชี fixture แบบสุ่มและลบเฉพาะข้อมูลของตัวเอง) |
 | UI actions/guards | test:ui, test:connect หรือ test:browser ตามเส้นทางที่เปลี่ยน |
 | Report columns/input | test:report-columns, test:report-input และตรวจหน้าจริงเมื่อมี local permission |
 | Next components/data flow | typecheck:web, build:web และ test:web เมื่อเปลี่ยน interaction สำคัญ |
@@ -171,13 +186,22 @@ Integration บางชุดต้องมี API/PostgreSQL และ .env �
 - ก่อน initial commit เคยผ่าน unit 19 tests และ typechecks ทั้งสองส่วน แต่ควรรันใหม่ตามงานที่แก้ ไม่อ้างจำนวนนี้เป็นผลรอบปัจจุบัน
 - ยังไม่ทดสอบสร้าง/เผยแพร่/ปรับงบโฆษณาจริง และไม่มี autonomous AI workflow ที่พิสูจน์ครบวงจร
 
+ทดสอบอ่านอย่างเดียวบนบัญชีจริงด้วย 0.5.0 (15 พ.ย. 2026, UI ภาษาไทย, THB): campaigns 8 แถวตรง footer, adsets 9 แถว ทั้งหมดเป็น geometry, identity=null, coverage visible_only; ระดับ ads จบด้วย "No supported reporting rows after 3 attempts"; currency/timezone/attribution unverified; preset ที่ใช้ไม่มีคอลัมน์ spend
+
+สิ่งที่ 0.6.0 เปลี่ยน (พิสูจน์ด้วย fixture เท่านั้น ยังต้องทดสอบซ้ำบน Meta จริง):
+
+- ระดับ ads: รอในหน้า (`waitForReportingRows` สูงสุด 8 วินาที) ก่อนอ่าน, ลองได้ 6 ครั้ง, เริ่มอ่านทันทีเมื่อแท็บโหลดเสร็จ, ใช้ checkbox เลือกแถวเป็น anchor เมื่อไม่มี switch, อ่าน header แบบ clip เมื่อ overlay บังกลาง header และ error ระบุจำนวน headers/switches/checkboxes/rows/loading เพื่อวิเคราะห์ layout จริง สาเหตุจริงบน Meta ยังไม่ยืนยันเพราะไม่มีหลักฐานหน้า ads ในรอบนั้น
+- ID จาก href ของลิงก์ในแถว (รวม parent IDs) และคอลัมน์ ID; ID ซ้ำหลายแถวถูกตั้งเป็น null
+- ตรวจ header/body scroll offset (`column_alignment`) และเลื่อนแนวนอนทุก reporting scroller พร้อมกัน
+- reporting_context.currency/timezone มาจากหลักฐานบนหน้า (`evidence`) attribution ยืนยันเฉพาะจากคอลัมน์ในแถว
+- บันทึก capture ลง PostgreSQL อัตโนมัติ + หน้าเว็บ "ข้อมูลจาก Extension"
+
 ลำดับงานที่ควรทำต่อ:
 
-1. ทำ report column selection ให้ตรวจ selected fields ได้จริงก่อน Apply/Save
-2. แก้การเลื่อนให้ header/body สอดคล้อง ตรวจด้วย cell value และภาพ ไม่อาศัยพิกัดเพียงอย่างเดียว
-3. เก็บ stable IDs และรายงานครบทุกแถว รวมทั้งตรวจ date/attribution/currency/timezone จากหลักฐาน
-4. เพิ่ม quality report ที่ระบุข้อมูลขาดและ reconciliation ก่อน normalize/import
-5. ค่อยขยาย workflow ยิงแอดตามงานที่ผู้ใช้อนุญาต โดยรักษา local lease และ approval พร้อมตรวจผลหลังทุกขั้น
+1. ทดสอบ 0.6.0 บนบัญชีจริงแบบอ่านอย่างเดียว: ดูว่า href ของชื่อแคมเปญ/ชุดโฆษณา/โฆษณามี `selected_*_ids` จริงหรือไม่ และระดับ ads อ่านแถวได้หรือไม่ (ถ้าไม่ได้ ใช้ค่า diagnostics ใน error)
+2. ทำ report column selection ให้ตรวจ selected fields ได้จริงก่อน Apply/Save และเพิ่มคอลัมน์ spend/attribution ใน preset
+3. เก็บรายงานครบทุกแถว (virtualized rows / pagination) และ reconciliation กับ footer ก่อนสรุปว่าครบ
+4. ค่อยขยาย workflow ยิงแอดตามงานที่ผู้ใช้อนุญาต โดยรักษา local lease และ approval พร้อมตรวจผลหลังทุกขั้น
 
 ## 8. Secrets, Git และการส่งต่องาน
 

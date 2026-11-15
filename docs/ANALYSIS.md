@@ -58,13 +58,13 @@
 
 ## การอ่าน DOM กับการนำเข้าที่ตรวจแล้ว
 
-`row_observations` มี `identity`, `name`, `method`, `cells[{header,text}]`, warnings
+`row_observations` มี `identity`, `identity_source` (`row_link_href` / `id_column` / null), `parent_ids`, `name`, `method`, `column_mapping` (`semantic` / `verified_geometry` / `unverified`), `cells[{header,text}]`, warnings และ snapshot มี `level`, `column_alignment`, `header_mode`, `reporting_context.evidence`
 
 - `semantic`: มีหลักฐานเซลล์กับ header จากโครงสร้างตารางและตำแหน่งที่ตรงกัน
-- `geometry`: ใช้ตำแหน่งข้อความภายใต้หัวคอลัมน์และแนวแถวของสวิตช์ ยังต้องตรวจทาน
+- `geometry`: ใช้ตำแหน่งข้อความภายใต้หัวคอลัมน์และแนวแถวของสวิตช์ (หรือ checkbox เลือกแถวเมื่อไม่มีสวิตช์) เป็น `verified_geometry` ได้เมื่อ header/body scroll offset ตรงกันและลิงก์ที่มี ID อยู่ในคอลัมน์ชื่อของแถวนั้น นอกนั้นเป็น `unverified`
 - ID อ่านเฉพาะพารามิเตอร์ ID ที่ชัดเจนใน URL ของลิงก์ภายใน Meta ไม่สร้าง ID จากชื่อหรือแถว
 - ไม่รวมชื่อซ้ำ และไม่ join ภาพคนละช่วงเลื่อนด้วยชื่อ
-- ข้อมูล DOM ไม่ถูกนำเข้า normalized Insights อัตโนมัติ ต้องยืนยัน IDs, วันที่, currency, timezone และ Attribution
+- ตั้งแต่ 0.6.0 ทุก snapshot ถูกบันทึกลง PostgreSQL (`capture_snapshots`, `capture_rows`) และแถวจะถูกยกเป็น normalized Insights อัตโนมัติ **เฉพาะ** เมื่อยืนยัน ID, parent IDs, วันที่, currency, timezone, Attribution, result type, column mapping, spend และ impressions ได้ครบ แถวอื่นเป็น `needs_review` พร้อมเหตุผล ดูหน้า "ข้อมูลจาก Extension"
 - ไม่สรุปจำนวนแถวที่เก็บเป็นความครบทั้งบัญชี; พารามิเตอร์เริ่มต้นจำกัด 5 ช่วงเลื่อนแนวตั้ง และสูงสุด 12 ครั้งแนวนอนต่อช่วง เก็บได้เพียงคอลัมน์ที่ Meta เปิดไว้
 - เปลี่ยนไปแท็บอื่นขณะอ่านจะพักงานพร้อมคำอธิบาย; กดทำต่อเพื่อเปิดแท็บ Meta กลับมา
 
@@ -120,3 +120,15 @@ Chrome กำหนดให้ประกาศ permission `debugger` ใน m
 การเปิดโหมดทำได้จาก popup ในเครื่องเท่านั้น บอทไม่มีคำสั่งเปิดโหมด และไม่รับคำสั่ง CDP, JavaScript, selectors หรือพิกัดจาก API ตัวอ่าน DOM จะคำนวณตำแหน่ง control ที่ยืนยันได้ใหม่ก่อนส่ง Input แต่ละครั้ง ตรวจ account/route/active tab และเวลาหมดอายุซ้ำ บันทึกได้เฉพาะปุ่มใน dialog ปรับแต่งคอลัมน์ที่ระบุชื่อได้ ไม่มีการใช้ Runtime/Network/Fetch ของ CDP และไม่มี Meta API integration
 
 ทดสอบ `npm run test:report-input` ใช้ MV3 Extension จริงกับหน้าจำลองที่ปฏิเสธ untrusted input ตรวจการค้นหา เลือก checkbox บันทึก scope สิทธิ์ และ detach ไม่ใช่การยืนยันว่าข้อมูล Meta บัญชีจริงเก็บครบแล้ว
+
+## DOM capture ใน Database 0.6.0
+
+| Endpoint | หน้าที่ |
+| --- | --- |
+| `GET /captures?account_id=ACCOUNT_ID[&status=needs_review]` | รายการ snapshot ล่าสุด 200 รายการ พร้อมจำนวนแถว แถวที่มี ID แถวที่ยกขึ้นแล้ว และเหตุผล |
+| `GET /captures/CAPTURE_UUID` | รายละเอียด snapshot และทุกแถว (cells, identity, review_status, review_reasons) |
+| `POST /captures/CAPTURE_UUID/review` | ตรวจซ้ำ body `{"context":{"timezone":"Asia/Bangkok","attribution":"...","result_type":"..."}}` (ไม่บังคับ) ผู้ใช้ยืนยันได้เฉพาะ timezone/attribution/result type เหมือน CSV import; ID วันที่ และสกุลเงินต้องมาจากหน้า Meta |
+
+Reason codes หลัก: `stable_id_unverified`, `parent_campaign_id_unverified`, `parent_ad_set_id_unverified`, `parent_campaign_not_promoted`, `column_mapping_unverified`, `header_body_scroll_mismatch`, `date_range_unverified`, `currency_unverified`, `currency_conflict`, `timezone_unverified`, `attribution_unverified`, `result_type_unverified`, `missing_required_metric:spend`, `csv_observation_exists`, `duplicate_id_in_snapshot`
+
+ข้อจำกัด: เป็น coverage `visible_only`; ภาพหลายช่วงเลื่อนของเอนทิตีเดียวกันใช้ grain เดียวกันจึง UPSERT ไม่ซ้ำ; ช่วงวันที่ต่างกัน (เช่น "30 วันที่ผ่านมา" ของคนละวัน) เป็นคนละ observation และอาจทับซ้อน ห้ามรวมยอดข้าม observation ที่ช่วงวันซ้อนกัน ถ้า preset คอลัมน์ไม่มี spend แถวจะไม่ถูกยกขึ้นเลย

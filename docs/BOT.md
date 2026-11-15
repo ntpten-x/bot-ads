@@ -94,11 +94,13 @@ Business Suite ที่ไม่มี `act` ใน URL อ่านได้ �
 {"command":"start","levels":["campaigns","adsets","ads"],"maxSteps":5}
 ```
 
+ตั้งแต่ 0.6.0 Extension รอในหน้าให้ header และแถวโหลด (สูงสุด 8 วินาทีต่อรอบ) และลองได้ 6 รอบ เริ่มอ่านเมื่อแท็บโหลดเสร็จ ถ้ายังอ่านแถวไม่ได้ error จะระบุ `headers/switches/checkboxes/rows/loading` ที่เห็น ทุก snapshot ถูกส่งไป Backend และบันทึกลง PostgreSQL อัตโนมัติ (ดู `GET /captures` ใน [ANALYSIS.md](ANALYSIS.md))
+
 `pause`, `resume`, `status` ยังใช้ได้ ต้องพักงานเก็บตารางก่อนใช้ `ui.*` เพื่อไม่ให้ตัวนำทางสองระบบแย่งแท็บ Job `needs_review` หมายถึงจบเส้นทางหรือถึงเพดานรอบ ไม่หมายถึงข้อมูลครบบัญชี Snapshots อาจทับซ้อนกันและไม่ถูกรวม spend เป็น normalized insights
 
 ## นำเข้าและส่งออกข้อมูล
 
-`POST /imports/validate`, `POST /imports`, `GET /imports?account_id=...`, `GET /export?account_id=...` ยังใช้ตาม README สำหรับ CSV → validation → PostgreSQL ข้อมูล DOM ดิบอยู่ใน command receipts และ device state รวมถึง Chrome Storage ไม่ถูกแปลงเป็น daily insights โดยเดาเงื่อนไขรายงาน
+`POST /imports/validate`, `POST /imports`, `GET /imports?account_id=...`, `GET /export?account_id=...` ยังใช้ตาม README สำหรับ CSV → validation → PostgreSQL ข้อมูล DOM ดิบอยู่ใน Chrome Storage, device state และตาราง `capture_snapshots`/`capture_rows` ถูกยกเป็น insights เฉพาะแถวที่ยืนยันเงื่อนไขครบ ไม่เดาเงื่อนไขรายงาน
 
 ## คำสั่งข้อมูลวิเคราะห์ 0.4.0
 

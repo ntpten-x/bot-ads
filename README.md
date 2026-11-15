@@ -2,7 +2,7 @@
 
 Chrome Extension สำหรับอ่านข้อมูลและควบคุม Meta Business Suite / Ads Manager ผ่านหน้าเว็บ + Backend รับคำสั่งบอทในเครื่อง + PostgreSQL
 
-**สถานะ:** Extension 0.5.0 รองรับการนำเข้า CSV และคำสั่งควบคุมหน้าเว็บ เคยทดสอบอ่านบัญชี Meta จริงบางส่วนแล้ว แต่ยังไม่ยืนยันการเก็บครบทั้งบัญชีหรือการสร้าง/เผยแพร่โฆษณาจริง
+**สถานะ:** Extension 0.6.0 รองรับการนำเข้า CSV และคำสั่งควบคุมหน้าเว็บ เคยทดสอบอ่านบัญชี Meta จริงบางส่วนแล้ว แต่ยังไม่ยืนยันการเก็บครบทั้งบัญชีหรือการสร้าง/เผยแพร่โฆษณาจริง
 
 **สำหรับ AI ที่ทำงานต่อ:** เริ่มอ่าน [AGENTS.md](AGENTS.md) และ [คู่มือส่งต่องานและรูปแบบการพัฒนา](docs/AI_HANDOFF.md) ซึ่งรวมโครงสร้างระบบ วิธีรัน ข้อกำหนดข้อมูล วิธีทดสอบ และงานค้าง
 
@@ -114,13 +114,15 @@ API ฟังเฉพาะ `127.0.0.1:4318` ในเครื่อง ไม
 
 กุญแจ UPSERT รวม account, level, entity, date interval, currency, timezone, attribution, result type และ breakdown dimensions ประวัติข้อมูลแต่ละ import อยู่ใน `insight_import_history` พร้อม job, ชื่อไฟล์ และ SHA-256 ไม่เก็บไฟล์ต้นฉบับทั้งไฟล์ในฐานข้อมูล
 
-DOM snapshots เป็นข้อมูลดิบใน Chrome Storage และสำเนาสถานะงานของ bot ใน PostgreSQL ไม่ถูกนำไปรวมเป็น normalized insights โดยอัตโนมัติ เพราะยังไม่ยืนยัน ID และเงื่อนไขรายงาน
+DOM snapshots ทุกชุดที่ Extension ส่งมาถูกบันทึกเป็นข้อมูลดิบใน PostgreSQL (`capture_jobs`, `capture_snapshots`, `capture_rows` จาก migration `003_dom_captures`) แถวที่ยืนยัน stable ID, parent IDs, ช่วงวันที่, สกุลเงิน, เขตเวลา, Attribution, result type, การจับคู่คอลัมน์ และ spend/impressions ครบเท่านั้นที่ถูกยกเป็น normalized insights อัตโนมัติ แถวอื่นอยู่ในสถานะ `needs_review` พร้อมเหตุผล ดูได้ที่หน้า **ข้อมูลจาก Extension** และ [docs/ANALYSIS.md](docs/ANALYSIS.md) การนำเข้า CSV ยังใช้ได้เหมือนเดิม
 
 ## ตรวจสอบ
 
 ```bash
 npm run check
 npm run test:api
+npm run test:captures
+npm run test:reader
 npx playwright install chromium
 npm run test:browser
 npm run test:ui
@@ -147,3 +149,10 @@ Browser test ใช้ Chrome Extension จริงกับหน้า Ads Ma
 ### เมาส์/คีย์บอร์ดรายงาน 0.5.0
 
 รุ่นล่าสุดเพิ่มสิทธิ์ Chrome `debugger` เพื่อส่งเมาส์และคีย์บอร์ดสำหรับหน้ารายงาน หลัง Reload/เชื่อมต่อ ให้กด **เปิดเมาส์/คีย์บอร์ดรายงาน 15 นาที** ใน popup ก่อนตั้งคอลัมน์ Chrome จะแสดงแถบ debugger ระหว่างคำสั่งและถอดเมื่อจบ โหมดนี้ผูกบัญชี/แท็บและเปิดจาก popup เท่านั้น ไม่มี API ให้บอทเปิดสิทธิ์เอง ดู [การใช้งานและขอบเขตสิทธิ์](docs/ANALYSIS.md)
+
+### อัปเดตเป็น 0.6.0
+
+1. `npm run db:migrate` (เพิ่ม `003_dom_captures`) แล้ว `npm run build`
+2. Restart Backend (`npm run dev:api`) — หน้าเว็บ Next.js ไม่ต้อง restart ถ้ารัน `dev:web` อยู่
+3. เปิด `chrome://extensions` กด Reload ที่ Extension ให้เป็น 0.6.0 เปิด popup ใส่ Backend token และกดเชื่อมต่อใหม่บนแท็บ Ads Manager ที่มี `act=ACCOUNT_ID`
+4. เริ่มงานอ่าน แล้วดูผลที่หน้า **ข้อมูลจาก Extension** (http://localhost:9321)
