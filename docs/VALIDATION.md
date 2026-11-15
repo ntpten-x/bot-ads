@@ -161,3 +161,13 @@ Final 0.5.0 checks: core check (19 tests/typecheck/bundles), Next production bui
 - The summary row text ("ผลลัพธ์จาก N …") was merged into the last row's name cell, and row hover buttons into the hovered row's name cell.
 
 0.6.1 (fixtures only until reloaded): summary row excluded and counted, hover labels stripped, vertical fallback (scrollable ancestor incl. overflow:hidden, else one wheel event; clipped pre-rendered rows ignored), immediate re-read after scroll/pan, `resume` rebinds to the bound tab, and capture performance analysis. Checks: typecheck (root and web), 34 unit tests, reader browser fixtures, capture API integration including `/captures/analysis`.
+
+## Live 0.6.1 read-only rerun and 0.6.2 corrections
+
+16 Nov 2026 (00:11 Asia/Bangkok), same device after reload; state reported 0.6.1. Fresh read-only `start campaigns adsets ads` finished `needs_review` in about 30 s. Column preset unchanged (no spend, ID or attribution columns).
+
+- Summary-row counts were captured: campaigns 8/8, adsets 8/10, ads 8/40 (`reported_total_rows`). Coverage did not improve: one snapshot per level, so vertical paging still did not reveal new rows. 0.6.1 could not tell whether a scroll moved anything.
+- The summary row text was still merged into the last row's name cell on all three levels even though it was counted: the sticky summary row is positioned outside the wrapper the 0.6.1 exclusion measured.
+- All 24 rows stayed `needs_review` (no IDs, no spend, timezone/attribution unverified).
+
+0.6.2 (fixtures only until reloaded): summary row excluded by its own text rectangle and by its text; new `scrollReportingRows` pages only when the visible rows actually change (scrollable ancestor → one wheel event → scrollIntoView), reverts a scroll that moved nothing, and records `job.scroll_log` (methods tried, element tag, overflow, pixel range, moved; no page text) so the next live run shows which strategy Meta accepts.
