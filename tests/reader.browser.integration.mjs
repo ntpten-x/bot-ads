@@ -82,7 +82,7 @@ try {
       .join("")}
     <input type="password" value="never-export" style="position:absolute;left:810px;top:65px">
   </div>`);
-  expect(geometry.reader_version).toBe("0.6.1");
+  expect(geometry.reader_version).toBe("0.6.2");
   expect(geometry.row_observations).toHaveLength(2);
   expect(geometry.row_observations.map((r) => r.name)).toEqual([
     "Same ad name",
@@ -246,7 +246,7 @@ try {
     </div>
   </div>`;
   const live = await read(liveShaped);
-  expect(live.reader_version).toBe("0.6.1");
+  expect(live.reader_version).toBe("0.6.2");
   expect(live.row_observations.map((r) => r.name)).toEqual(["Fixture 0", "Fixture 1", "Fixture 2", "Fixture 3"]);
   expect(live.row_observations[0].cells.find((c) => c.header === "แคมเปญ").text).toBe("Fixture 0");
   expect(live.row_observations[3].cells.find((c) => c.header === "แคมเปญ").text).toBe("Fixture 3");
@@ -272,6 +272,49 @@ try {
   );
   expect(await page.evaluate(() => ReaderFixture.scrollReportingTable("vertical"))).toBe(true);
   expect(await page.evaluate(() => window.__wheel)).toBe(50);
+  // Sticky summary row positioned outside its zero-height wrapper (as seen live on 0.6.1).
+  const detached = liveShaped.replace(
+    '<div style="position:relative;width:900px;height:30px;margin-top:-22px;background:#fff">',
+    '<div style="position:relative;width:900px;height:0"><div style="position:absolute;left:0;top:-22px;width:900px;height:26px;background:#fff">',
+  ).replace('<div style="position:absolute;left:610px;top:4px">999</div>\n    </div>', '<div style="position:absolute;left:610px;top:4px">999</div>\n    </div></div>');
+  expect(detached).not.toBe(liveShaped);
+  const det = await read(detached);
+  expect(det.reported_total_rows).toBe(8);
+  expect(JSON.stringify(det.row_observations)).not.toContain("ผลลัพธ์จาก");
+  expect(JSON.stringify(det.row_observations)).not.toContain("999");
+  // Verified paging: overflow:hidden body moves and the visible rows change.
+  const paged = await page.evaluate(() => ReaderFixture.scrollReportingRows());
+  expect(paged.moved).toBe(true);
+  expect(paged.method).toBe("ancestor");
+  expect(await page.evaluate(() => document.querySelector("#body").scrollTop)).toBe(150);
+  // Script-virtualized body that pages on wheel.
+  await read(
+    `<div style="position:relative;width:900px">
+    <div style="position:relative;height:40px"><div role="columnheader" style="position:absolute;left:0;width:100px;height:40px">ปิด / เปิด</div><div role="columnheader" style="position:absolute;left:100px;width:300px;height:40px">แคมเปญ</div></div>
+    <div id="vb" style="position:relative;height:200px;overflow:hidden"><div id="vc">
+      ${[0, 1, 2, 3].map((i) => `<div role="switch" style="position:absolute;left:10px;top:${i * 50 + 10}px;width:40px;height:20px"></div><div style="position:absolute;left:110px;top:${i * 50 + 8}px;width:280px">Virtual ${i}</div>`).join("")}
+    </div></div></div>`,
+    "/adsmanager/manage/campaigns",
+    () => {
+      document.querySelector("#vb").addEventListener("wheel", (e) => {
+        document.querySelector("#vc").style.transform = `translateY(-${e.deltaY}px)`;
+      });
+    },
+  );
+  const wheeled = await page.evaluate(() => ReaderFixture.scrollReportingRows());
+  expect(wheeled.moved).toBe(true);
+  expect(wheeled.method).toBe("wheel");
+  // Nothing can move: reported as not moved instead of pretending.
+  await read(
+    `<div style="position:relative;width:900px;height:200px">
+    <div role="columnheader" style="position:absolute;left:0;top:0;width:100px;height:40px">ปิด / เปิด</div><div role="columnheader" style="position:absolute;left:100px;top:0;width:300px;height:40px">แคมเปญ</div>
+    ${[0, 1].map((i) => `<div role="switch" style="position:absolute;left:10px;top:${60 + i * 50}px;width:40px;height:20px"></div><div style="position:absolute;left:110px;top:${58 + i * 50}px">Static ${i}</div>`).join("")}</div>`,
+  );
+  const stuck = await page.evaluate(() => ReaderFixture.scrollReportingRows());
+  expect(stuck.moved).toBe(false);
+  expect(stuck.method).toBe("none");
+  expect(stuck.tried.map((t) => t.method)).toEqual(["wheel", "scroll_into_view"]);
+  console.log("Reader 0.6.2 fixtures passed: detached summary row excluded, verified paging via ancestor and wheel, honest no-move result;");
   console.log(
     "Reader 0.6.1 fixtures passed: summary row excluded and counted, hover buttons stripped from names, overflow:hidden body scrolled by one page with one row overlap, wheel fallback for script-virtualized bodies;",
   );

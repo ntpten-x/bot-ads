@@ -7,6 +7,7 @@ import { controlUi, uiSession } from "./ui-controller.js";
 import { prepareReportWithInput } from "./report-input.js";
 import {
   readVisibleTable,
+  scrollReportingRows,
   scrollReportingTable,
   waitForReportingRows,
 } from "./reader.js";
@@ -24,6 +25,8 @@ type Job = {
   read_attempts?: number;
   last_wait_reason?: string;
   level_warnings?: string[];
+  /** Vertical paging evidence: methods tried and whether rows changed (no page text). */
+  scroll_log?: { level: Level; step: number; moved: boolean; method: string; tried: unknown[]; reason?: string }[];
   status: "running" | "paused" | "needs_review" | "error";
   error?: string;
   snapshots: ReturnType<typeof readVisibleTable>[];
@@ -240,9 +243,22 @@ async function advance() {
       await put(job);
       const [scrolled] = await chrome.scripting.executeScript({
         target: { tabId: job.tabId },
-        func: scrollReportingTable,
+        func: scrollReportingRows,
       });
-      if (scrolled.result) {
+      const paging = scrolled.result;
+      job.scroll_log = [
+        ...(job.scroll_log ?? []),
+        {
+          level: job.levels[job.index],
+          step: job.step,
+          moved: !!paging?.moved,
+          method: paging?.method ?? "none",
+          tried: paging?.tried ?? [],
+          ...(paging && "reason" in paging && paging.reason ? { reason: paging.reason } : {}),
+        },
+      ].slice(-40);
+      await put(job);
+      if (paging?.moved) {
         // Read the newly revealed rows soon instead of waiting for the 30 s alarm.
         setTimeout(() => void advance(), 1500);
         return;

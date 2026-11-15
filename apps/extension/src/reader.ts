@@ -443,13 +443,19 @@ export function readVisibleTable() {
         if (!m || !parent || !visible(parent)) continue;
         const count = Number((m[1] ?? m[2]).replaceAll(",", ""));
         if (Number.isInteger(count)) reportedTotals.add(count);
-        let rect = parent.getBoundingClientRect();
-        for (let a = parent.parentElement; a && a !== scope; a = a.parentElement) {
+        // Start from the text itself: Meta's sticky summary row can be positioned
+        // outside its wrappers, so only ancestors that really contain it count.
+        const range = document.createRange();
+        range.selectNodeContents(footerWalker.currentNode);
+        const own = range.getBoundingClientRect();
+        let rect = { top: own.top - 2, bottom: own.bottom + 2 };
+        for (let a: Element | null = parent; a && a !== scope; a = a.parentElement) {
           const r = a.getBoundingClientRect();
           if (r.height > 150 || markersIn(a, anchorSelector).length) break;
-          rect = r;
+          if (r.top <= own.top && r.bottom >= own.bottom)
+            rect = { top: Math.min(rect.top, r.top), bottom: Math.max(rect.bottom, r.bottom) };
         }
-        footers.push({ top: rect.top, bottom: rect.bottom });
+        footers.push(rect);
       }
       for (const band of bands)
         for (const f of footers)
@@ -503,7 +509,13 @@ export function readVisibleTable() {
             bottom = Math.min(bottom, clip.bottom);
           }
         }
-        if (right - left < 1 || bottom - top < 1 || inFooter(top, bottom)) continue;
+        if (
+          right - left < 1 ||
+          bottom - top < 1 ||
+          inFooter(top, bottom) ||
+          footerPattern.test(text)
+        )
+          continue;
         const row = bands.findIndex((b) => top >= b.top && bottom <= b.bottom);
         const headers = observedHeaders.filter(
           (h) => left >= h.rect.left - 2 && right <= h.rect.right + 2,
@@ -636,7 +648,7 @@ export function readVisibleTable() {
   if (attributionHeader) evidence.attribution = "row_column";
   return {
     account_id: url.searchParams.get("act"),
-    reader_version: "0.6.1",
+    reader_version: "0.6.2",
     page: url.pathname,
     level,
     captured_at: new Date().toISOString(),
@@ -854,4 +866,100 @@ export async function waitForReportingRows(timeoutMs = 8000) {
     await new Promise((r) => setTimeout(r, 500));
   }
   return { ready: false, waited_ms: Date.now() - started, ...diagnostics };
+}
+
+/**
+ * Vertical paging that verifies movement. Tries, in order, every scrollable
+ * ancestor of the last visible row, one wheel event over the rows, and
+ * scrollIntoView of the last row. A step counts only when the visible rows
+ * actually changed; otherwise the scroll is reverted. Returns diagnostics
+ * (element tags and pixel sizes only, never page text).
+ */
+export async function scrollReportingRows() {
+  const settle = (ms: number) =>
+    new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, ms)));
+  const visible = (el: Element) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight;
+  };
+  const tried: { method: string; tag?: string; overflow?: string; range?: number; moved: boolean }[] = [];
+  const headers = [...document.querySelectorAll('[role="columnheader"],thead th')].filter(visible);
+  if (!headers.length) return { moved: false, method: "none", tried, reason: "no_headers" };
+  const headerBottom = Math.max(...headers.map((h) => h.getBoundingClientRect().bottom));
+  const rows = () =>
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        '[role="switch"],input[type="checkbox"],[role="checkbox"]',
+      ),
+    ]
+      .filter((el) => {
+        if (!visible(el) || el.closest('[role="columnheader"]')) return false;
+        const r = el.getBoundingClientRect();
+        const cy = r.top + r.height / 2;
+        if (cy <= headerBottom || r.bottom > innerHeight) return false;
+        for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+          if (getComputedStyle(a).overflowY === "visible") continue;
+          const c = a.getBoundingClientRect();
+          if (cy < c.top || cy > c.bottom) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+  // Signature of what is on screen: which anchor elements are visible, where, and the
+  // short text right of each (recycled virtual rows keep elements but change text).
+  const ids = new WeakMap<Element, number>();
+  let next = 0;
+  const idOf = (el: Element) => {
+    if (!ids.has(el)) ids.set(el, next++);
+    return ids.get(el)!;
+  };
+  const signature = () =>
+    rows()
+      .map((el) => {
+        const r = el.getBoundingClientRect();
+        const y = r.top + r.height / 2;
+        const texts = [40, 120, 240].map((dx) => {
+          const t = (document.elementFromPoint(Math.min(innerWidth - 2, r.right + dx), y)?.textContent ?? "").trim();
+          return t.length < 300 ? t.slice(0, 80) : "";
+        });
+        return `${idOf(el)}@${Math.round(y)}:${texts.join("/")}`;
+      })
+      .join("|");
+  const anchors = rows();
+  if (anchors.length < 2) return { moved: false, method: "none", tried, reason: "fewer_than_two_rows" };
+  const last = anchors[anchors.length - 1];
+  const before = signature();
+  const delta = Math.max(
+    40,
+    last.getBoundingClientRect().top - anchors[0].getBoundingClientRect().top,
+  );
+  const changed = () => signature() !== before;
+  for (let a: Element | null = last.parentElement; a; a = a.parentElement) {
+    const range = a.scrollHeight - a.clientHeight;
+    if (range < 40) continue;
+    const start = a.scrollTop;
+    a.scrollTop = start + delta;
+    if (a.scrollTop === start) continue;
+    await settle(250);
+    const moved = changed();
+    tried.push({ method: "ancestor", tag: a.tagName.toLowerCase(), overflow: getComputedStyle(a).overflowY, range, moved });
+    if (moved) return { moved, method: "ancestor", tried };
+    a.scrollTop = start; // Not the row scroller; leave the page as it was.
+  }
+  const lr = last.getBoundingClientRect();
+  const x = Math.min(innerWidth - 2, lr.right + 120),
+    y = lr.top + lr.height / 2;
+  const target = document.elementFromPoint(x, y) ?? last;
+  target.dispatchEvent(
+    new WheelEvent("wheel", { deltaY: delta, deltaMode: 0, bubbles: true, cancelable: true, clientX: x, clientY: y }),
+  );
+  await settle(600);
+  let moved = changed();
+  tried.push({ method: "wheel", tag: target.tagName.toLowerCase(), moved });
+  if (moved) return { moved, method: "wheel", tried };
+  last.scrollIntoView({ block: "start", inline: "nearest" });
+  await settle(400);
+  moved = changed();
+  tried.push({ method: "scroll_into_view", moved });
+  return { moved, method: moved ? "scroll_into_view" : "none", tried };
 }
