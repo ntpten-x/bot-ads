@@ -5,7 +5,11 @@ import {
 } from "../../../packages/core/src/control.js";
 import { controlUi, uiSession } from "./ui-controller.js";
 import { prepareReportWithInput } from "./report-input.js";
-import { readVisibleTable, scrollReportingTable } from "./reader.js";
+import {
+  readVisibleTable,
+  scrollReportingTable,
+  waitForReportingRows,
+} from "./reader.js";
 type Level = "campaigns" | "adsets" | "ads";
 type Job = {
   id: string;
@@ -19,6 +23,7 @@ type Job = {
   horizontal_step?: number;
   read_attempts?: number;
   last_wait_reason?: string;
+  level_warnings?: string[];
   status: "running" | "paused" | "needs_review" | "error";
   error?: string;
   snapshots: ReturnType<typeof readVisibleTable>[];
@@ -145,21 +150,39 @@ async function advance() {
       throw new Error(
         "Unexpected reporting page; resume after reviewing the tab",
       );
+    // Wait in the page for headers and row markers instead of relying only on
+    // the 30 second alarm. Diagnostics explain an unsupported layout.
+    const [waited] = await chrome.scripting.executeScript({
+      target: { tabId: job.tabId },
+      func: waitForReportingRows,
+      args: [8000],
+    });
+    const diag = waited.result;
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: job.tabId },
       func: readVisibleTable,
     });
     const snapshot = result.result;
-    if (!snapshot?.tables.length && !snapshot?.unstructured?.viewport_text) {
+    const maxAttempts = 6;
+    if (!snapshot?.tables.length && !snapshot?.row_observations.length) {
       job.read_attempts = (job.read_attempts ?? 0) + 1;
-      job.last_wait_reason = `กำลังรอแถวข้อมูลโหลด (${job.read_attempts}/3)`;
-      if (job.read_attempts < 3) {
+      const detail = diag
+        ? `headers=${diag.headers}, switches=${diag.switches}, checkboxes=${diag.checkboxes}, rows=${diag.rows}, loading=${diag.loading}`
+        : "no diagnostics";
+      job.last_wait_reason = `กำลังรอแถวข้อมูลโหลด (${job.read_attempts}/${maxAttempts}; ${detail})`;
+      if (job.read_attempts < maxAttempts) {
         await put(job);
         return;
       }
-      throw new Error(
-        "No supported reporting rows after 3 attempts. The page may still be loading or use an unsupported layout.",
-      );
+      if (!snapshot?.unstructured?.viewport_text)
+        throw new Error(
+          `No supported reporting rows after ${maxAttempts} attempts on ${expected} (${detail}). The page may still be loading or use an unsupported layout.`,
+        );
+      // Keep the visible text as raw evidence, but report that rows were not separated.
+      job.level_warnings = [
+        ...(job.level_warnings ?? []),
+        `${job.levels[job.index]}: rows could not be separated (${detail}); visible text kept for review only`,
+      ];
     }
     job.read_attempts = 0;
     delete job.last_wait_reason;
@@ -186,7 +209,11 @@ async function advance() {
       JSON.stringify(previous.row_observations) ===
         JSON.stringify(snapshot.row_observations) &&
       previous.page === snapshot.page;
-    if (!same) job.snapshots.push(snapshot);
+    if (!same) {
+      job.snapshots.push(snapshot);
+      await put(job);
+      void publishSoon();
+    }
     if (job.scan_columns) {
       if ((job.horizontal_step ?? 0) < 12) {
         const [pan] = await chrome.scripting.executeScript({
@@ -243,6 +270,23 @@ async function advance() {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "collect") void advance();
 });
+// Start reading soon after a level finishes loading instead of waiting for the next alarm.
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.status !== "complete") return;
+  void getJob().then((job) => {
+    if (job?.status === "running" && job.tabId === tabId)
+      setTimeout(() => void advance(), 1500);
+  });
+});
+// Best effort: send new snapshots to the local Backend so they are stored in PostgreSQL promptly.
+async function publishSoon() {
+  try {
+    const bridge = await getBridge();
+    if (bridge?.enabled) await publishBridgeState(bridge);
+  } catch {
+    /* The periodic bridge tick retries. */
+  }
+}
 async function perform(message: any) {
   if (
     typeof message?.command === "string" &&
