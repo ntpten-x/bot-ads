@@ -37,12 +37,14 @@ const DataView = dynamic(() => import("./data-view"), {
 });
 const AnalysisView = dynamic(() => import("./analysis-view"));
 const HistoryView = dynamic(() => import("./history-view"));
+const CapturesView = dynamic(() => import("./captures-view"));
 type View =
   | "analysis"
   | "overview"
   | "control"
   | "import"
   | "data"
+  | "captures"
   | "history"
   | "settings";
 const navigation: {
@@ -86,6 +88,13 @@ const navigation: {
     icon: "database",
     title: "ข้อมูลและการส่งออก",
     description: "ค้นหาข้อมูลที่จัดเก็บ และเตรียมไปวิเคราะห์ต่อ",
+  },
+  {
+    id: "captures",
+    label: "ข้อมูลจาก Extension",
+    icon: "database",
+    title: "ข้อมูลดิบจาก Extension",
+    description: "ตรวจข้อมูลที่ Extension อ่านจากหน้า Meta และสถานะการยกขึ้นเป็นข้อมูลวิเคราะห์",
   },
   {
     id: "history",
@@ -757,6 +766,16 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
                 run={run}
                 busy={!!busy}
                 showDetails={(title, data) => setDetail({ title, data })}
+              />
+            ) : null}
+            {view === "captures" ? (
+              <CapturesView
+                key={account}
+                account={account}
+                api={api}
+                run={run}
+                busy={!!busy}
+                notify={notify}
               />
             ) : null}
             {view === "history" ? (

@@ -115,3 +115,38 @@ export type Summary = {
 export type Api = <T>(path: string, body?: unknown) => Promise<T>;
 export type Notify = (message: string, error?: boolean) => void;
 export type Run = (label: string, fn: () => Promise<void>) => Promise<void>;
+export type CaptureSummary = {
+  id: string;
+  job_id: string | null;
+  account_id: string | null;
+  page: string;
+  level: string | null;
+  captured_at: string;
+  reader_version: string | null;
+  coverage: string | null;
+  column_alignment: string | null;
+  reporting_context: Record<string, unknown> & {
+    date_range_label?: string | null;
+    currency?: string;
+    timezone?: string;
+  };
+  row_count: number;
+  rows_with_id: number;
+  promoted_rows: number;
+  review_status: string;
+  review_reasons: string[];
+};
+export type CaptureRowDetail = {
+  row_index: number;
+  entity_id: string | null;
+  identity_source: string | null;
+  name: string | null;
+  method: string;
+  column_mapping: string | null;
+  cells: { header: string; text: string }[];
+  review_status: string;
+  review_reasons: string[];
+};
+export type CaptureDetail = Omit<CaptureSummary, "rows_with_id" | "promoted_rows"> & {
+  rows: CaptureRowDetail[];
+};
