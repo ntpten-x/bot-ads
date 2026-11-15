@@ -4,6 +4,7 @@ import useSWR from "swr";
 import type { Api, CaptureDetail, CaptureSummary, Run } from "../lib/types";
 import { time } from "../lib/utils";
 import { EmptyRow, Note, Panel, Pill } from "./ui";
+import CaptureAnalysisPanel from "./capture-analysis-panel";
 
 const statusNames: Record<string, string> = {
   needs_review: "รอตรวจ",
@@ -67,6 +68,7 @@ export default function CapturesView({
   const rows = list.data ?? [];
   return (
     <div className="captures-grid">
+      <CaptureAnalysisPanel account={account} api={api} run={run} />
       <Panel
         title="ข้อมูลดิบจาก Extension"
         subtitle="ทุกครั้งที่ Extension อ่านตาราง ระบบบันทึกลง PostgreSQL อัตโนมัติ แถวที่ยืนยัน ID วันที่ สกุลเงิน เขตเวลา Attribution และคอลัมน์ครบเท่านั้นที่ถูกยกขึ้นเป็นข้อมูลวิเคราะห์"

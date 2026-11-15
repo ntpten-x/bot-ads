@@ -1875,3 +1875,20 @@ td small {
     font-size: 13px;
   }
 }
+
+.capture-analysis-level {
+  border-top: 1px solid var(--line, #e5e7eb);
+  margin-top: 16px;
+  padding-top: 12px;
+}
+.capture-analysis-level h3 {
+  font-size: 1rem;
+  margin: 0 0 4px;
+}
+.capture-recommendations {
+  margin: 8px 0 12px;
+  padding-left: 18px;
+}
+.capture-recommendations li {
+  margin: 4px 0;
+}
