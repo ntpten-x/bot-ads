@@ -15,7 +15,7 @@ switch (command) {
     body = {
       command: "start",
       levels: args.length ? args : ["ads"],
-      maxSteps: 5,
+      maxSteps: 12,
       scan_columns: true,
     };
     break;
@@ -23,7 +23,7 @@ switch (command) {
     body = {
       command,
       levels: args.length ? args : ["campaigns", "adsets", "ads"],
-      maxSteps: 5,
+      maxSteps: 12,
     };
     break;
   case "pause":

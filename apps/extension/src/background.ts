@@ -224,6 +224,7 @@ async function advance() {
         if (pan.result) {
           job.horizontal_step = (job.horizontal_step ?? 0) + 1;
           await put(job);
+          setTimeout(() => void advance(), 1500);
           return;
         }
       }
@@ -241,7 +242,11 @@ async function advance() {
         target: { tabId: job.tabId },
         func: scrollReportingTable,
       });
-      if (scrolled.result) return;
+      if (scrolled.result) {
+        // Read the newly revealed rows soon instead of waiting for the 30 s alarm.
+        setTimeout(() => void advance(), 1500);
+        return;
+      }
     }
     job.index++;
     job.step = 0;
@@ -453,6 +458,16 @@ async function perform(message: any) {
       const job = await getJob();
       if (!job || job.index >= job.levels.length)
         throw new Error("No resumable job");
+      // A job started before the user reconnected may still point at the old tab.
+      // Rebind only to the currently bound tab of the same account; verifiedTab
+      // below still checks host, route and account before anything is read.
+      const boundTab = Number(message.tabId);
+      if (
+        Number.isInteger(boundTab) &&
+        boundTab !== job.tabId &&
+        String(message.account ?? "") === job.account
+      )
+        job.tabId = boundTab;
       const resumeTab = await verifiedTab(job);
       await chrome.tabs.update(job.tabId, { active: true });
       if (resumeTab.windowId !== undefined)

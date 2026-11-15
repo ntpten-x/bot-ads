@@ -82,7 +82,7 @@ try {
       .join("")}
     <input type="password" value="never-export" style="position:absolute;left:810px;top:65px">
   </div>`);
-  expect(geometry.reader_version).toBe("0.6.0");
+  expect(geometry.reader_version).toBe("0.6.1");
   expect(geometry.row_observations).toHaveLength(2);
   expect(geometry.row_observations.map((r) => r.name)).toEqual([
     "Same ad name",
@@ -217,6 +217,64 @@ try {
   expect(
     await page.evaluate(() => [document.querySelector("#hs").scrollLeft, document.querySelector("#bs").scrollLeft]),
   ).toEqual(await page.evaluate(() => [document.querySelector("#bs").scrollLeft, document.querySelector("#bs").scrollLeft]));
+  // Live-shaped layout (synthetic names): body scroller is overflow:hidden with a
+  // custom scrollbar, rows are pre-rendered below the clip, a row has hover buttons
+  // in its name cell and Meta's summary row overlaps the last visible row band.
+  const liveShaped = `<div id="wrap" style="position:relative;width:900px">
+    <div style="position:relative;width:900px;height:40px">
+      <div role="columnheader" style="position:absolute;left:0;top:0;width:100px;height:40px">ปิด / เปิด</div>
+      <div role="columnheader" style="position:absolute;left:100px;top:0;width:300px;height:40px">แคมเปญ</div>
+      <div role="columnheader" style="position:absolute;left:400px;top:0;width:200px;height:40px">การแสดงโฆษณา</div>
+      <div role="columnheader" style="position:absolute;left:600px;top:0;width:200px;height:40px">ผลลัพธ์</div>
+    </div>
+    <div id="body" style="position:relative;width:900px;height:200px;overflow:hidden">
+      <div style="position:relative;height:400px">
+      ${[0, 1, 2, 3, 4, 5, 6, 7]
+        .map(
+          (i) => `<div role="switch" style="position:absolute;left:10px;top:${i * 50 + 10}px;width:40px;height:20px"></div>
+        <div style="position:absolute;left:110px;top:${i * 50 + 8}px">Fixture ${i}</div>
+        ${i === 0 ? '<div role="button" style="position:absolute;left:110px;top:28px">แก้ไข</div><div role="button" style="position:absolute;left:170px;top:28px">วิเคราะห์</div>' : ""}
+        <div style="position:absolute;left:410px;top:${i * 50 + 8}px">ปิด</div>
+        <div style="position:absolute;left:610px;top:${i * 50 + 8}px">${i + 1}0</div>`,
+        )
+        .join("")}
+      </div>
+    </div>
+    <div style="position:relative;width:900px;height:30px;margin-top:-22px;background:#fff">
+      <div style="position:absolute;left:110px;top:4px">ผลลัพธ์จาก 8 แคมเปญ</div>
+      <div style="position:absolute;left:610px;top:4px">999</div>
+    </div>
+  </div>`;
+  const live = await read(liveShaped);
+  expect(live.reader_version).toBe("0.6.1");
+  expect(live.row_observations.map((r) => r.name)).toEqual(["Fixture 0", "Fixture 1", "Fixture 2", "Fixture 3"]);
+  expect(live.row_observations[0].cells.find((c) => c.header === "แคมเปญ").text).toBe("Fixture 0");
+  expect(live.row_observations[3].cells.find((c) => c.header === "แคมเปญ").text).toBe("Fixture 3");
+  expect(live.row_observations[3].cells.find((c) => c.header === "ผลลัพธ์").text).toBe("40");
+  expect(JSON.stringify(live.row_observations)).not.toContain("999");
+  expect(live.reported_total_rows).toBe(8);
+  expect(await page.evaluate(() => ReaderFixture.scrollReportingTable("vertical"))).toBe(true);
+  expect(await page.evaluate(() => document.querySelector("#body").scrollTop)).toBe(150);
+  const liveNext = await page.evaluate(() => ReaderFixture.readVisibleTable());
+  expect(liveNext.row_observations.map((r) => r.name)).toEqual(["Fixture 3", "Fixture 4", "Fixture 5", "Fixture 6"]);
+  // Script-virtualized body without any scrollable element: one wheel event is sent.
+  await read(
+    `<div id="vwrap" style="position:relative;width:900px">
+    <div style="position:relative;height:40px"><div role="columnheader" style="position:absolute;left:0;width:100px;height:40px">ปิด / เปิด</div><div role="columnheader" style="position:absolute;left:100px;width:300px;height:40px">แคมเปญ</div></div>
+    <div id="vbody" style="position:relative;height:120px;overflow:hidden">
+      ${[0, 1].map((i) => `<div role="switch" style="position:absolute;left:10px;top:${i * 50 + 10}px;width:40px;height:20px"></div><div style="position:absolute;left:110px;top:${i * 50 + 8}px">Virtual ${i}</div>`).join("")}
+    </div></div>`,
+    "/adsmanager/manage/campaigns",
+    () => {
+      window.__wheel = 0;
+      document.querySelector("#vbody").addEventListener("wheel", (e) => (window.__wheel = e.deltaY));
+    },
+  );
+  expect(await page.evaluate(() => ReaderFixture.scrollReportingTable("vertical"))).toBe(true);
+  expect(await page.evaluate(() => window.__wheel)).toBe(50);
+  console.log(
+    "Reader 0.6.1 fixtures passed: summary row excluded and counted, hover buttons stripped from names, overflow:hidden body scrolled by one page with one row overlap, wheel fallback for script-virtualized bodies;",
+  );
   console.log(
     "Reader integration (fixtures only) passed: ads-level checkbox rows, href IDs and parent IDs, duplicate-ID rejection, header overlay fallback, scroll mismatch detection and synced scrolling, visible currency/timezone evidence, wait diagnostics;",
   );

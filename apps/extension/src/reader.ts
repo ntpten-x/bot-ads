@@ -277,6 +277,8 @@ export function readVisibleTable() {
     warnings: string[];
   };
   const row_observations: Observation[] = [];
+  // Row counts Meta prints in the summary row ("ผลลัพธ์จาก 40 ชิ้น", "Results from 8 campaigns").
+  const reportedTotals = new Set<number>();
   const resolveIdentity = (
     found: ReturnType<typeof linkIds>,
     cells: { header: string; text: string }[],
@@ -429,6 +431,31 @@ export function readVisibleTable() {
           bottom: i < centers.length - 1 ? (y + centers[i + 1]) / 2 : y + 24,
         };
       });
+      // Meta renders a summary row under the last entity row. Its label and
+      // totals must never join a row band; its row count is kept for coverage.
+      const footerPattern =
+        /^(?:ผลลัพธ์จาก\s*(?:โฆษณา|แคมเปญ|ชุดโฆษณา)?\s*([\d,]+)|results from\s+([\d,]+))/i;
+      const footers: { top: number; bottom: number }[] = [];
+      const footerWalker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+      while (footerWalker.nextNode()) {
+        const parent = footerWalker.currentNode.parentElement;
+        const m = footerPattern.exec(footerWalker.currentNode.textContent?.trim() ?? "");
+        if (!m || !parent || !visible(parent)) continue;
+        const count = Number((m[1] ?? m[2]).replaceAll(",", ""));
+        if (Number.isInteger(count)) reportedTotals.add(count);
+        let rect = parent.getBoundingClientRect();
+        for (let a = parent.parentElement; a && a !== scope; a = a.parentElement) {
+          const r = a.getBoundingClientRect();
+          if (r.height > 150 || markersIn(a, anchorSelector).length) break;
+          rect = r;
+        }
+        footers.push({ top: rect.top, bottom: rect.bottom });
+      }
+      for (const band of bands)
+        for (const f of footers)
+          if (band.top < f.top && band.bottom > f.top) band.bottom = f.top;
+      const inFooter = (top: number, bottom: number) =>
+        footers.some((f) => (top + bottom) / 2 >= f.top && (top + bottom) / 2 <= f.bottom);
       const cells = anchors.map(() => new Map<string, string[]>());
       const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
       while (walker.nextNode()) {
@@ -476,7 +503,7 @@ export function readVisibleTable() {
             bottom = Math.min(bottom, clip.bottom);
           }
         }
-        if (right - left < 1 || bottom - top < 1) continue;
+        if (right - left < 1 || bottom - top < 1 || inFooter(top, bottom)) continue;
         const row = bands.findIndex((b) => top >= b.top && bottom <= b.bottom);
         const headers = observedHeaders.filter(
           (h) => left >= h.rect.left - 2 && right <= h.rect.right + 2,
@@ -504,9 +531,15 @@ export function readVisibleTable() {
             return y >= band.top && y <= band.bottom;
           })
           .map(({ a }) => a);
+        // Row hover buttons (แก้ไข / สร้างซ้ำ / แผนภูมิ / วิเคราะห์) are not part of the name.
+        const hoverAction =
+          /^(แก้ไข|สร้างซ้ำ|แผนภูมิ|ดูแผนภูมิ|วิเคราะห์|เปรียบเทียบ|edit|duplicate|charts?|view charts|analy[sz]e|compare)$/i;
         const rowCells = [...map].map(([header, parts]) => ({
           header,
-          text: parts.join("\n"),
+          text: (nameHeader && header === nameHeader.label
+            ? parts.filter((p, i) => i === 0 || !hoverAction.test(p))
+            : parts
+          ).join("\n"),
         }));
         const rowWarnings = [
           "Geometric alignment; duplicate names are not stable IDs. Do not join captures by name.",
@@ -603,12 +636,13 @@ export function readVisibleTable() {
   if (attributionHeader) evidence.attribution = "row_column";
   return {
     account_id: url.searchParams.get("act"),
-    reader_version: "0.6.0",
+    reader_version: "0.6.1",
     page: url.pathname,
     level,
     captured_at: new Date().toISOString(),
     tables,
     row_observations,
+    reported_total_rows: reportedTotals.size === 1 ? [...reportedTotals][0] : null,
     format: tables.length ? "structured" : "visible_text_fallback",
     unstructured,
     column_alignment,
@@ -714,7 +748,64 @@ export function scrollReportingTable(
     }
     scope = scope.parentElement;
   }
-  return false;
+  if (horizontal) return false;
+  // Fallback for bodies whose scroller is overflow:hidden with a custom scrollbar,
+  // or that virtualize rows in script: move the nearest scrollable ancestor of the
+  // last visible row so it becomes the first row (one row of overlap). Without a
+  // scrollable ancestor, send one wheel event over the rows. The caller re-reads
+  // and stops when the visible rows did not change.
+  const headerBottom = Math.max(
+    0,
+    ...headers.filter(visible).map((h) => h.getBoundingClientRect().bottom),
+  );
+  const anchors = [
+    ...document.querySelectorAll<HTMLElement>(
+      '[role="switch"],input[type="checkbox"],[role="checkbox"]',
+    ),
+  ]
+    .filter((el) => {
+      if (!visible(el) || el.closest('[role="columnheader"]')) return false;
+      const r = el.getBoundingClientRect();
+      const cy = r.top + r.height / 2;
+      if (cy <= headerBottom || r.bottom > innerHeight) return false;
+      // Rows rendered ahead of time but clipped by the body are not on screen.
+      for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+        if (getComputedStyle(a).overflowY === "visible") continue;
+        const c = a.getBoundingClientRect();
+        if (cy < c.top || cy > c.bottom) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+  if (anchors.length < 2) return false;
+  const last = anchors[anchors.length - 1];
+  const delta = Math.max(
+    40,
+    last.getBoundingClientRect().top - anchors[0].getBoundingClientRect().top,
+  );
+  for (let a = last.parentElement; a && a !== document.body; a = a.parentElement) {
+    if (a.scrollHeight - a.clientHeight < 40) continue;
+    const before = a.scrollTop;
+    a.scrollTop = before + delta;
+    if (a.scrollTop !== before) return true;
+  }
+  const lr = last.getBoundingClientRect();
+  const target =
+    document.elementFromPoint(
+      Math.min(innerWidth - 2, lr.right + 120),
+      lr.top + lr.height / 2,
+    ) ?? last;
+  target.dispatchEvent(
+    new WheelEvent("wheel", {
+      deltaY: delta,
+      deltaMode: 0,
+      bubbles: true,
+      cancelable: true,
+      clientX: lr.right + 120,
+      clientY: lr.top + lr.height / 2,
+    }),
+  );
+  return true;
 }
 
 /** Wait inside the page until reporting headers and row markers render. */
