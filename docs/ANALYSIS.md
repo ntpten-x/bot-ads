@@ -132,3 +132,17 @@ Chrome กำหนดให้ประกาศ permission `debugger` ใน m
 Reason codes หลัก: `stable_id_unverified`, `parent_campaign_id_unverified`, `parent_ad_set_id_unverified`, `parent_campaign_not_promoted`, `column_mapping_unverified`, `header_body_scroll_mismatch`, `date_range_unverified`, `currency_unverified`, `currency_conflict`, `timezone_unverified`, `attribution_unverified`, `result_type_unverified`, `missing_required_metric:spend`, `csv_observation_exists`, `duplicate_id_in_snapshot`
 
 ข้อจำกัด: เป็น coverage `visible_only`; ภาพหลายช่วงเลื่อนของเอนทิตีเดียวกันใช้ grain เดียวกันจึง UPSERT ไม่ซ้ำ; ช่วงวันที่ต่างกัน (เช่น "30 วันที่ผ่านมา" ของคนละวัน) เป็นคนละ observation และอาจทับซ้อน ห้ามรวมยอดข้าม observation ที่ช่วงวันซ้อนกัน ถ้า preset คอลัมน์ไม่มี spend แถวจะไม่ถูกยกขึ้นเลย
+
+## วิเคราะห์ประสิทธิภาพจาก DOM capture 0.6.1
+
+หน้าเว็บ "ข้อมูลจาก Extension" มีแผง **วิเคราะห์ประสิทธิภาพจากงานอ่านล่าสุด** และ API `GET /captures/analysis?account_id=ACCOUNT_ID[&job_id=JOB_UUID]` (ค่าเริ่มต้นคืองานอ่านล่าสุด) ใช้ `packages/core/src/capture-analysis.ts` ซึ่งเป็น pure function มี unit test
+
+- อ่าน capture ทั้งที่ `needs_review` และยกขึ้นแล้ว แต่ทุกผลมีป้ายกำกับ: ตัวตน (`verified_ids` / `no_stable_ids`), ยอดใช้จ่าย (`reported` / `estimated`), coverage เทียบจำนวนแถวที่ Meta พิมพ์ในแถวสรุป ("ผลลัพธ์จาก N …")
+- สถานะการแสดงโฆษณาแปลงเป็น `payment_error`, `off`, `parent_off`, `active`, `learning`, `limited`, `in_review`, `rejected`, `not_delivering`, `completed`, `unknown` ข้อความที่ไม่รู้จักเป็น `unknown`
+- ผลลัพธ์ ต้นทุนต่อผลลัพธ์ อิมเพรสชัน งบประมาณ (จำนวน/ต่อวัน/ตลอดอายุ/ใช้งบระดับบน) ค่า "—" หรือไม่มีคอลัมน์เป็น `null` ไม่เป็น 0
+- ยอดใช้จ่าย: ใช้คอลัมน์ "จำนวนเงินที่ใช้จ่ายไป" ถ้ามี มิฉะนั้นเป็น **ค่าประมาณ** ผลลัพธ์ × ต้นทุนต่อผลลัพธ์ (`spend_source=estimate_results_x_cost_per_result`) ไม่ถูกบันทึกเป็น spend จริง
+- แถวที่ไม่มี ID รวมซ้ำได้เฉพาะเมื่อทุกเซลล์ตรงกันในงานอ่านเดียวกัน (ภาพที่เลื่อนซ้อนกัน) ไม่ใช่ identity และไม่ใช้ข้ามงานอ่าน แถวที่ header/body เลื่อนไม่ตรงกันไม่ถูกจัดอันดับ
+- สรุปตามประเภทผลลัพธ์จากผลรวม (ต้นทุนถ่วงน้ำหนัก = ยอดใช้จ่ายรวม / ผลลัพธ์รวม) จัดอันดับด้วยต้นทุนต่อผลลัพธ์เฉพาะแถวที่มีผลลัพธ์อย่างน้อย 5 และประเภทผลลัพธ์หลักเดียวกัน
+- คำแนะนำ (มนุษย์ตัดสินใจ บอทไม่เปลี่ยนโฆษณา): ข้อผิดพลาดการชำระเงิน, ตัวที่ปิดอยู่แต่ต้นทุนไม่เกินค่ากลาง, ต้นทุนสูงกว่าค่ากลาง ≥30% (ต้องมีแถวเทียบได้ ≥3), อิมเพรสชัน ≥1,000 แต่ไม่มีผลลัพธ์, ผลลัพธ์น้อย, การแก้ไขที่ยังไม่เผยแพร่, อ่านได้ไม่ครบ, ไม่มีคอลัมน์ spend หรือ ID
+
+ให้ผลวิเคราะห์ใช้ตัดสินใจได้ดีขึ้น: เพิ่มคอลัมน์ "จำนวนเงินที่ใช้จ่ายไป", "ID แคมเปญ", "ID ชุดโฆษณา", "ID โฆษณา" (และ "การตั้งค่าการระบุที่มา") ใน preset ของ Meta และวางไว้ช่วงซ้ายของตารางเพื่อให้อยู่ในจอโดยไม่ต้องเลื่อนแนวนอน

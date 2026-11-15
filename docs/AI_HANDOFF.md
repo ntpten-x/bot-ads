@@ -1,6 +1,6 @@
 # AI handoff และรูปแบบการพัฒนาระบบ
 
-เอกสารส่งต่องาน ณ 15 พฤศจิกายน 2026 อ้างอิง Extension 0.6.0 (อัปเดตจาก 0.5.0 ในวันเดียวกัน) ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+เอกสารส่งต่องาน ณ 15 พฤศจิกายน 2026 อ้างอิง Extension 0.6.1 (อัปเดตจาก 0.5.0 และ 0.6.0 ในวันเดียวกัน) ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
 
 ## 1. เป้าหมายและขอบเขต
 
@@ -196,9 +196,18 @@ Integration บางชุดต้องมี API/PostgreSQL และ .env �
 - reporting_context.currency/timezone มาจากหลักฐานบนหน้า (`evidence`) attribution ยืนยันเฉพาะจากคอลัมน์ในแถว
 - บันทึก capture ลง PostgreSQL อัตโนมัติ + หน้าเว็บ "ข้อมูลจาก Extension"
 
+ทดสอบอ่านอย่างเดียวบนบัญชีจริงด้วย 0.6.0 (15 พ.ย. 2026): ทั้ง 3 ระดับอ่านแถวได้ด้วย geometry (campaigns 8/8 ตรงแถวสรุป, adsets 8/10, ads 8/40) column_alignment=aligned, currency=THB จากสัญลักษณ์, date range อ่านได้ แต่ identity=null ทุกแถว (ชื่อในตารางไม่ใช่ลิงก์ที่มี `selected_*_ids`; ระดับ ads ไม่มีลิงก์เลย), ไม่มีคอลัมน์ spend, timezone/attribution unverified จึงไม่มีแถวใดถูกยกขึ้น การเลื่อนแนวตั้งไม่ขยับ (body ไม่ใช่ overflow auto/scroll) และแถวสรุป "ผลลัพธ์จาก N …" กับปุ่ม hover ไปปนในชื่อแถวสุดท้าย/แถวที่เมาส์ชี้
+
+สิ่งที่ 0.6.1 เปลี่ยน (fixture ผ่าน รอทดสอบจริงหลัง reload):
+
+- ตัดแถวสรุปออกจากแถบแถว และเก็บจำนวนเป็น `reported_total_rows`; ตัดปุ่ม hover (แก้ไข/สร้างซ้ำ/แผนภูมิ/วิเคราะห์) ออกจากเซลล์ชื่อ
+- เลื่อนแนวตั้งสำรอง: เลื่อน ancestor ที่ scroll ได้ของแถวสุดท้าย (รวม overflow:hidden) ให้แถวสุดท้ายขึ้นเป็นแถวแรก (ซ้อน 1 แถว) ถ้าไม่มีให้ส่ง wheel event หนึ่งครั้ง แล้วอ่านใหม่ภายใน 1.5 วินาที CLI `start`/`collect` ใช้ maxSteps 12
+- `resume` ผูกงานเดิมเข้ากับแท็บที่เชื่อมต่ออยู่ปัจจุบัน (บัญชีเดียวกัน) แทนแท็บเก่าที่ปิดไปแล้ว
+- วิเคราะห์ประสิทธิภาพจาก capture (`capture-analysis.ts`, `GET /captures/analysis`, แผงในหน้า "ข้อมูลจาก Extension") ดู [Analysis](ANALYSIS.md)
+
 ลำดับงานที่ควรทำต่อ:
 
-1. ทดสอบ 0.6.0 บนบัญชีจริงแบบอ่านอย่างเดียว: ดูว่า href ของชื่อแคมเปญ/ชุดโฆษณา/โฆษณามี `selected_*_ids` จริงหรือไม่ และระดับ ads อ่านแถวได้หรือไม่ (ถ้าไม่ได้ ใช้ค่า diagnostics ใน error)
+1. Reload เป็น 0.6.1 แล้วทดสอบการเลื่อนแนวตั้งบนบัญชีจริง (ads ต้องได้ใกล้ 40 แถวตามแถวสรุป) และให้ผู้ใช้เพิ่มคอลัมน์ ID + spend ใน preset เพื่อให้ identity มาจาก `id_column`
 2. ทำ report column selection ให้ตรวจ selected fields ได้จริงก่อน Apply/Save และเพิ่มคอลัมน์ spend/attribution ใน preset
 3. เก็บรายงานครบทุกแถว (virtualized rows / pagination) และ reconciliation กับ footer ก่อนสรุปว่าครบ
 4. ค่อยขยาย workflow ยิงแอดตามงานที่ผู้ใช้อนุญาต โดยรักษา local lease และ approval พร้อมตรวจผลหลังทุกขั้น
