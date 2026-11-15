@@ -61,6 +61,8 @@ export const domSnapshotSchema = z
       .passthrough()
       .optional(),
     row_observations: z.array(rowSchema).default([]),
+    /** Row count printed in Meta's summary row, when exactly one was visible. */
+    reported_total_rows: z.number().int().nonnegative().nullable().optional(),
   })
   .passthrough();
 export type DomSnapshot = z.infer<typeof domSnapshotSchema>;

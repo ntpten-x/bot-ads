@@ -116,11 +116,20 @@ try {
   assert.equal((await req(`/captures/${pending.id}/review`, { context: { selector: "x" } })).status, 400);
   exported = await req(`/export?account_id=${account}`);
   assert.equal(exported.body.records.length, 4);
+  const analysis = await req(`/captures/analysis?account_id=${account}`);
+  assert.equal(analysis.status, 200);
+  assert.equal(analysis.body.job.id, jobId);
+  const campaignsAnalysis = analysis.body.levels.find((l: { level: string }) => l.level === "campaigns");
+  assert.equal(campaignsAnalysis.snapshots, 2);
+  assert.ok(campaignsAnalysis.rows.every((r: { spend_source: string }) => r.spend_source === "column"));
+  assert.equal(analysis.body.data_quality.identity, "no_stable_ids", "the unverified campaign row has no ID");
+  assert.equal((await req(`/captures/analysis?account_id=1${Date.now()}`)).status, 404);
+  assert.equal((await req(`/captures/analysis?account_id=${account}&job_id=not-a-uuid`)).status, 400);
   const summary = await req(`/accounts/${account}/summary`);
   assert.equal(summary.body.campaigns, 2);
   assert.equal(summary.body.ads, 1);
   console.log(
-    "Capture API integration (fixture) passed: raw snapshot persistence, idempotency, promotion of verified rows only, needs_review reasons, operator-confirmed timezone, export",
+    "Capture API integration (fixture) passed: raw snapshot persistence, idempotency, promotion of verified rows only, needs_review reasons, operator-confirmed timezone, export, job analysis endpoint",
   );
 } finally {
   // Remove only fixture rows created by this test.

@@ -12,6 +12,7 @@ import {
   type RowEvaluation,
 } from "../../../packages/core/src/dom-capture.js";
 import { recordKey, type AdRecord } from "../../../packages/core/src/index.js";
+import { analyzeCaptureJob } from "../../../packages/core/src/capture-analysis.js";
 
 /**
  * Persistence for Extension DOM captures. Every snapshot reported by the
@@ -240,6 +241,41 @@ export async function persistJob(pool: Pool, device: string, boundAccount: strin
 
 export function captureRoutes(pool: Pool) {
   const router = Router();
+  // Performance analysis of one capture job (latest by default). Visible-only and
+  // labelled as unverified; registered before /captures/:id so "analysis" is not an id.
+  router.get("/captures/analysis", async (req, res) => {
+    const account = z.string().regex(/^\d+$/).parse(req.query.account_id);
+    const requested = z.uuid().optional().parse(req.query.job_id || undefined);
+    const job = requested
+      ? requested
+      : (
+          await pool.query(
+            "SELECT job_id FROM capture_snapshots WHERE bound_account=$1 AND job_id IS NOT NULL GROUP BY job_id ORDER BY max(captured_at) DESC LIMIT 1",
+            [account],
+          )
+        ).rows[0]?.job_id;
+    if (!job) {
+      res.status(404).json({ error: "No Extension captures for this account" });
+      return;
+    }
+    const s = await pool.query(
+      "SELECT raw FROM capture_snapshots WHERE bound_account=$1 AND job_id=$2 AND review_status<>'rejected' ORDER BY captured_at",
+      [account, job],
+    );
+    const snapshots = s.rows
+      .map((r) => domSnapshotSchema.safeParse(r.raw))
+      .filter((p) => p.success && p.data.account_id === account)
+      .map((p) => p.data!);
+    const meta = await pool.query(
+      "SELECT id,status,levels,error,extension_version,first_seen_at,updated_at FROM capture_jobs WHERE id=$1 AND account_id=$2",
+      [job, account],
+    );
+    const jobs = await pool.query(
+      "SELECT job_id,max(captured_at) AS captured_at,count(*)::int AS snapshots FROM capture_snapshots WHERE bound_account=$1 AND job_id IS NOT NULL GROUP BY job_id ORDER BY max(captured_at) DESC LIMIT 20",
+      [account],
+    );
+    res.json({ job: meta.rows[0] ?? { id: job }, jobs: jobs.rows, ...analyzeCaptureJob(snapshots) });
+  });
   router.get("/captures", async (req, res) => {
     const account = z.string().regex(/^\d+$/).parse(req.query.account_id);
     const status = z.enum(["needs_review", "partially_promoted", "promoted", "rejected"]).optional().parse(req.query.status || undefined);
