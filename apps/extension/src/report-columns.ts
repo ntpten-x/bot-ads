@@ -1,0 +1,429 @@
+/** Only reporting preferences: no editor, ad state, budgets or publishing controls. */
+export async function prepareReportColumns(options: {
+  account: string;
+  goal: "messages" | "sales" | "leads";
+  fields?: ReportField[];
+}) {
+  const diagnostics: {
+    dialog: string;
+    checkbox_samples: {
+      label: string;
+      aria: string;
+      item_visible: string;
+      item_text: string;
+    }[];
+    searches: { label: string; placeholder: string }[];
+    queries: string[];
+  } = { dialog: "", checkbox_samples: [], searches: [], queries: [] };
+  try {
+    const started = Date.now(),
+      deadline = started + 40000;
+    const guard = () => {
+      const u = new URL(location.href);
+      if (
+        !["adsmanager.facebook.com", "business.facebook.com"].includes(
+          u.hostname,
+        ) ||
+        !/^\/adsmanager\/manage\/(campaigns|adsets|ads)\/?$/.test(u.pathname) ||
+        u.searchParams.get("act") !== options.account
+      )
+        throw new Error(
+          "Reporting page or account changed; column setup stopped",
+        );
+    };
+    const visible = (el: Element) => {
+      const r = el.getBoundingClientRect(),
+        s = getComputedStyle(el);
+      return (
+        r.width > 0 &&
+        r.height > 0 &&
+        r.bottom > 0 &&
+        r.top < innerHeight &&
+        s.display !== "none" &&
+        s.visibility !== "hidden"
+      );
+    };
+    const text = (el: Element) =>
+      (
+        el.getAttribute("aria-label") ||
+        (el instanceof HTMLElement ? el.innerText : el.textContent) ||
+        ""
+      )
+        .replace(/[\u200b-\u200d\ufeff]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    const wait = async (check: () => boolean, ms = 900) => {
+      const end = Math.min(deadline, Date.now() + ms);
+      while (Date.now() < end) {
+        guard();
+        if (check()) return true;
+        await new Promise((r) => setTimeout(r, 75));
+      }
+      return check();
+    };
+    const controls = (root: ParentNode) =>
+      [
+        ...root.querySelectorAll<HTMLElement>(
+          'button,[role="button"],[role="menuitem"]',
+        ),
+      ].filter(visible);
+    const custom =
+      /^(?:customize columns|กำหนดคอลัมน์เอง|ปรับแต่งคอลัมน์)(?:\.{3}|…)?$/i;
+    const getDialog = () =>
+      [...document.querySelectorAll<HTMLElement>('[role="dialog"]')]
+        .filter(visible)
+        .find((d) => {
+          const named = text(d);
+          const headings = [...d.querySelectorAll('h1,h2,h3,[role="heading"]')];
+          const labelled = (d.getAttribute("aria-labelledby") ?? "")
+            .split(/\s+/)
+            .map((id) => document.getElementById(id))
+            .filter((e) => e !== null);
+          return (
+            custom.test(d.getAttribute("aria-label") ?? "") ||
+            [...headings, ...labelled].some((h) => custom.test(text(h))) ||
+            custom.test(named)
+          );
+        });
+    guard();
+    if (!getDialog()) {
+      let customize = controls(document).filter((el) => custom.test(text(el)));
+      if (!customize.length) {
+        const openingMenu = controls(document).some(
+          (el) =>
+            el.getAttribute("role") === "menuitem" &&
+            /^(loading|กำลังโหลด)/i.test(text(el)),
+        );
+        if (!openingMenu) {
+          const button = controls(document).filter((el) =>
+            /^(columns|คอลัมน์)\s*[:：]/i.test(text(el)),
+          );
+          if (button.length !== 1)
+            throw new Error(
+              "ไม่พบปุ่มคอลัมน์ที่ยืนยันได้ เปิดคอลัมน์ → กำหนดคอลัมน์เองใน Meta แล้วลองใหม่",
+            );
+          guard();
+          button[0].click();
+        }
+        await wait(
+          () => controls(document).some((el) => custom.test(text(el))),
+          8000,
+        );
+        customize = controls(document).filter((el) => custom.test(text(el)));
+      }
+      if (customize.length !== 1)
+        throw new Error("ไม่พบเมนูกำหนดคอลัมน์เองที่ยืนยันได้");
+      guard();
+      customize[0].click();
+      if (!(await wait(() => !!getDialog(), 6000)))
+        throw new Error("Meta ไม่เปิดหน้าตั้งคอลัมน์ที่รองรับ");
+    }
+    const fields = options.fields ?? [];
+    if (!fields.length) throw new Error("Report field catalogue missing");
+    const selected: string[] = [],
+      missing: string[] = [];
+    const label = (el: HTMLElement) => {
+      const aria = el.getAttribute("aria-label");
+      if (aria) return aria.trim();
+      const ids = el.getAttribute("aria-labelledby");
+      if (ids)
+        return ids
+          .split(/\s+/)
+          .map((id) => document.getElementById(id)?.textContent ?? "")
+          .join(" ")
+          .trim();
+      if (el instanceof HTMLInputElement) {
+        const l = [...(el.labels ?? [])];
+        if (l.length) return l.map(text).join(" ");
+      }
+      const item = el.closest('li,[role="listitem"]');
+      if (
+        item &&
+        getDialog()?.contains(item) &&
+        item.querySelectorAll('input[type="checkbox"],[role="checkbox"]')
+          .length === 1
+      )
+        return text(item);
+      return text(el);
+    };
+    const dialogBefore = getDialog()!;
+    diagnostics.dialog = text(dialogBefore).slice(0, 120);
+    diagnostics.checkbox_samples = [
+      ...dialogBefore.querySelectorAll<HTMLElement>(
+        'input[type="checkbox"],[role="checkbox"]',
+      ),
+    ]
+      .filter(visible)
+      .slice(0, 25)
+      .map((el) => {
+        const item = el.closest<HTMLElement>('li,[role="listitem"]');
+        return {
+          label: label(el).slice(0, 180),
+          aria: el.getAttribute("aria-label") ?? "",
+          item_visible: item?.innerText.slice(0, 180) ?? "",
+          item_text: item?.textContent?.slice(0, 180) ?? "",
+        };
+      });
+    diagnostics.searches = [
+      ...dialogBefore.querySelectorAll<HTMLInputElement>("input"),
+    ]
+      .filter((el) => ["text", "search"].includes(el.type))
+      .map((el) => ({ label: label(el), placeholder: el.placeholder }));
+    for (const field of fields) {
+      guard();
+      if (Date.now() >= deadline) {
+        missing.push(field.key);
+        continue;
+      }
+      const matches = () => {
+        const d = getDialog();
+        if (!d) return [];
+        return [
+          ...d.querySelectorAll<HTMLElement>(
+            'input[type="checkbox"],[role="checkbox"]',
+          ),
+        ].filter(
+          (el) =>
+            visible(el) &&
+            field.labels.some(
+              (l) =>
+                label(el).replace(/\s+/g, " ").toLowerCase() ===
+                l.toLowerCase(),
+            ),
+        );
+      };
+      let found = matches();
+      if (!found.length) {
+        const d = getDialog();
+        if (!d) throw new Error("หน้าตั้งคอลัมน์ปิดก่อนเสร็จ");
+        const searches = [
+          ...d.querySelectorAll<HTMLInputElement>("input"),
+        ].filter(
+          (el) =>
+            visible(el) &&
+            ["text", "search"].includes(el.type) &&
+            /search|ค้นหา/i.test(el.placeholder + " " + label(el)),
+        );
+        if (searches.length === 1) {
+          for (const query of [
+            field.labels[0],
+            field.labels.find((l) => /[ก-๙]/.test(l)),
+          ].filter((s): s is string => !!s)) {
+            diagnostics.queries.push(query);
+            const setter = Object.getOwnPropertyDescriptor(
+              HTMLInputElement.prototype,
+              "value",
+            )?.set;
+            guard();
+            setter?.call(searches[0], query);
+            searches[0].dispatchEvent(new Event("input", { bubbles: true }));
+            searches[0].dispatchEvent(new Event("change", { bubbles: true }));
+            await wait(() => matches().length > 0, 450);
+            found = matches();
+            if (found.length) break;
+          }
+        }
+      }
+      if (found.length !== 1) {
+        missing.push(field.key);
+        continue;
+      }
+      const checkbox = found[0];
+      const checked =
+        checkbox instanceof HTMLInputElement
+          ? checkbox.checked
+          : checkbox.getAttribute("aria-checked") === "true";
+      if (!checked) {
+        guard();
+        checkbox.click();
+        await wait(
+          () =>
+            checkbox instanceof HTMLInputElement
+              ? checkbox.checked
+              : checkbox.getAttribute("aria-checked") === "true",
+          450,
+        );
+      }
+      const after = matches();
+      if (
+        after.length === 1 &&
+        (after[0] instanceof HTMLInputElement
+          ? after[0].checked
+          : after[0].getAttribute("aria-checked") === "true")
+      )
+        selected.push(field.key);
+      else missing.push(field.key);
+    }
+    if (!selected.length)
+      return {
+        ok: false as const,
+        error: "ยังยืนยันการเลือกคอลัมน์ไม่ได้ จึงไม่บันทึกมุมมองรายงาน",
+        goal: options.goal,
+        selected,
+        missing,
+        missing_required: fields
+          .filter((f) => f.required && missing.includes(f.key))
+          .map((f) => f.key),
+        applied: false,
+        diagnostics,
+        warning:
+          "No verified field selection; report preferences were not saved.",
+      };
+    const dialog = getDialog();
+    if (!dialog) throw new Error("หน้าตั้งคอลัมน์ปิดก่อนตรวจผล");
+    const apply = controls(dialog).filter(
+      (el) =>
+        /^(apply|save|นำไปใช้|ใช้|บันทึก)$/i.test(text(el)) &&
+        !el.hasAttribute("disabled") &&
+        el.getAttribute("aria-disabled") !== "true",
+    );
+    if (apply.length !== 1)
+      throw new Error("เลือกคอลัมน์แล้ว แต่ไม่พบปุ่มนำไปใช้ที่ยืนยันได้ ตรวจหน้าต่าง Meta");
+    guard();
+    apply[0].click();
+    const applied = await wait(() => !getDialog(), 1500);
+    return {
+      diagnostics,
+      ok: true as const,
+      goal: options.goal,
+      selected,
+      missing,
+      missing_required: fields
+        .filter((f) => f.required && missing.includes(f.key))
+        .map((f) => f.key),
+      applied,
+      warning:
+        "Only visible reporting preferences changed. Verify headers and exported values; missing fields were not invented.",
+    };
+  } catch (error) {
+    return {
+      diagnostics,
+      ok: false as const,
+      error: error instanceof Error ? error.message : String(error),
+      goal: options.goal,
+      selected: [] as string[],
+      missing: [] as string[],
+      missing_required: [] as string[],
+      applied: false,
+      warning: "Column setup stopped; review the visible Meta dialog.",
+    };
+  }
+}
+
+export type ReportField = { key: string; labels: string[]; required: boolean };
+export function getReportFields(goal: "messages" | "sales" | "leads") {
+  const fields: ReportField[] = [
+    {
+      key: "account_id",
+      labels: ["Account ID", "ID บัญชีโฆษณา", "รหัสบัญชีโฆษณา"],
+      required: true,
+    },
+    {
+      key: "campaign_name",
+      labels: ["Campaign name", "ชื่อแคมเปญ"],
+      required: true,
+    },
+    {
+      key: "ad_set_name",
+      labels: ["Ad set name", "ชื่อชุดโฆษณา"],
+      required: false,
+    },
+    { key: "ad_name", labels: ["Ad name", "ชื่อโฆษณา"], required: false },
+    { key: "budget", labels: ["Budget", "งบประมาณ"], required: false },
+    {
+      key: "campaign_id",
+      labels: ["Campaign ID", "ID แคมเปญ", "รหัสแคมเปญ"],
+      required: true,
+    },
+    {
+      key: "ad_set_id",
+      labels: ["Ad set ID", "ID ชุดโฆษณา", "รหัสชุดโฆษณา"],
+      required: true,
+    },
+    {
+      key: "ad_id",
+      labels: ["Ad ID", "ID โฆษณา", "รหัสโฆษณา"],
+      required: true,
+    },
+    {
+      key: "spend",
+      labels: ["Amount spent", "จำนวนเงินที่ใช้จ่ายไป", "จำนวนเงินที่ใช้ไป"],
+      required: true,
+    },
+    {
+      key: "impressions",
+      labels: ["Impressions", "อิมเพรสชัน"],
+      required: true,
+    },
+    {
+      key: "link_clicks",
+      labels: ["Link clicks", "การคลิกลิงก์"],
+      required: true,
+    },
+    { key: "reach", labels: ["Reach", "การเข้าถึง"], required: false },
+    { key: "frequency", labels: ["Frequency", "ความถี่"], required: false },
+    { key: "results", labels: ["Results", "ผลลัพธ์"], required: false },
+    {
+      key: "cost_per_result",
+      labels: ["Cost per result", "ต้นทุนต่อผลลัพธ์"],
+      required: false,
+    },
+    {
+      key: "link_ctr",
+      labels: ["CTR (link click-through rate)", "CTR (อัตราการคลิกผ่านลิงก์)"],
+      required: false,
+    },
+    {
+      key: "link_cpc",
+      labels: ["CPC (cost per link click)", "CPC (ต้นทุนต่อการคลิกลิงก์)"],
+      required: false,
+    },
+    {
+      key: "cpm",
+      labels: [
+        "CPM (cost per 1,000 impressions)",
+        "CPM (ต้นทุนต่ออิมเพรสชัน 1,000 ครั้ง)",
+      ],
+      required: false,
+    },
+    {
+      key: "attribution",
+      labels: ["Attribution setting", "การตั้งค่าการระบุที่มา"],
+      required: true,
+    },
+  ];
+  if (goal === "messages")
+    fields.push({
+      key: "messaging_conversations",
+      labels: ["Messaging conversations started", "การส่งข้อความเพื่อเริ่มการสนทนา"],
+      required: true,
+    });
+  if (goal === "leads")
+    fields.push({
+      key: "leads",
+      labels: ["Leads", "ลูกค้าเป้าหมาย"],
+      required: true,
+    });
+  if (goal === "sales")
+    fields.push(
+      { key: "purchases", labels: ["Purchases", "การซื้อ"], required: true },
+      {
+        key: "purchase_value",
+        labels: [
+          "Purchases conversion value",
+          "Purchase conversion value",
+          "ค่าคอนเวอร์ชั่นการซื้อ",
+          "มูลค่าคอนเวอร์ชั่นการซื้อ",
+        ],
+        required: true,
+      },
+      {
+        key: "landing_page_views",
+        labels: ["Landing page views", "การดูแลนดิ้งเพจ"],
+        required: false,
+      },
+    );
+  fields.sort((a, b) => Number(b.required) - Number(a.required));
+
+  return fields;
+}

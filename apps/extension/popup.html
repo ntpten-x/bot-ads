@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Meta Ads Data Collector</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <span class="mark">M<span>↓</span></span>
+      <div>
+        <h1>Meta Ads Data Collector</h1>
+        <p>อ่านข้อมูลและควบคุมโฆษณาผ่านหน้าเว็บ</p>
+      </div>
+      <span class="badge">Web control</span>
+    </header>
+    <main>
+      <section class="connection-card">
+        <h2>เชื่อมต่อ Extension</h2>
+        <label for="deviceId">Device ID ของ Extension นี้ (ไม่ใช่รหัสลับ)</label>
+        <div class="device-copy">
+          <input
+            id="deviceId"
+            readonly
+            placeholder="กำลังสร้าง Device ID…"
+            spellcheck="false"
+          /><button id="copyDevice" class="secondary" disabled>คัดลอก</button>
+        </div>
+        <p class="note">
+          ระบบหน้าเว็บค้นพบอุปกรณ์อัตโนมัติหลังเชื่อมต่อ ไม่จำเป็นต้องคัดลอก ID
+        </p>
+        <label for="token">รหัสเชื่อมต่อ Backend — API_TOKEN จากไฟล์ .env</label>
+        <input
+          id="token"
+          type="password"
+          autocomplete="off"
+          placeholder="กรอกรหัส Backend ที่นี่ ไม่ใช่ Device ID"
+        />
+        <div class="actions">
+          <button id="bridgeEnable">เชื่อมต่อและทดสอบอ่าน</button
+          ><button id="bridgeDisable" class="secondary">ปิดการเชื่อมต่อ</button>
+        </div>
+        <p id="bridgeStatus" role="status">ยังไม่ได้เชื่อมต่อ</p>
+        <p id="connectionFeedback" role="status">
+          เปิด Ads Manager แล้วตรวจบัญชีด้านล่าง จากนั้นกดเชื่อมต่อและทดสอบอ่าน
+        </p>
+        <button id="openWorkspace" class="secondary">เปิดหน้าระบบ 9321</button>
+      </section>
+      <section class="account">
+        <div>
+          <label for="account">บัญชีโฆษณา</label
+          ><input id="account" placeholder="Account ID" inputmode="numeric" />
+        </div>
+        <button id="detect" class="secondary">ตรวจบัญชีที่เปิดอยู่</button>
+      </section>
+      <nav aria-label="เปิดหน้ารายงาน">
+        <button data-page="campaigns">Campaigns</button
+        ><button data-page="adsets">Ad Sets</button
+        ><button data-page="ads">Ads</button>
+      </nav>
+
+      <section>
+        <h2>ขอบเขตการรวบรวม</h2>
+        <label
+          ><input type="checkbox" id="scanColumns" checked />
+          อ่านคอลัมน์นอกจอด้วยการเลื่อนแนวนอน</label
+        >
+        <p class="note">
+          เปิดแท็บ Meta ค้างไว้ระหว่างเก็บข้อมูล
+          ชุดวิเคราะห์และรายการค่าที่ขาดอยู่ในเมนูข้อมูลวิเคราะห์ของหน้าระบบ
+        </p>
+        <div class="modules">
+          <label><input type="checkbox" id="campaigns" checked />Campaign</label
+          ><label><input type="checkbox" id="adsets" checked />Ad Sets</label
+          ><label><input type="checkbox" id="ads" checked />Ads</label
+          ><span>Insights และคอนเวอร์ชั่นผ่าน CSV</span
+          ><span>Creative เมื่อมีใน CSV</span>
+        </div>
+        <p class="note">อ่านเฉพาะข้อมูลที่แสดง ไม่เปลี่ยนสถานะ งบ หรือเนื้อหาโฆษณา</p>
+        <div class="actions">
+          <button id="read" class="secondary">อ่านหน้าปัจจุบัน</button
+          ><button id="run">เริ่มเก็บอัตโนมัติ</button
+          ><button id="pause" class="secondary">พัก</button
+          ><button id="resume" class="secondary">ทำต่อ</button>
+        </div>
+        <p id="job" role="status">ยังไม่มีงานอัตโนมัติ</p>
+        <button id="snapshots" class="text">
+          ส่งออกภาพรวมข้อมูลที่อ่านได้ (JSON)
+        </button>
+      </section>
+
+      <section>
+        <h2>ตั้งคอลัมน์รายงานด้วยเมาส์และคีย์บอร์ด</h2>
+        <p>
+          เปิดใช้ครั้งละ 15 นาทีสำหรับแท็บและบัญชีที่เชื่อมต่อ ใช้เลือกคอลัมน์ ค้นหา
+          และบันทึกมุมมองรายงาน Chrome จะแสดงแถบกำลังแก้ไขข้อบกพร่องระหว่างทำงาน
+        </p>
+        <div class="actions">
+          <button id="reportInputEnable">เปิดเมาส์/คีย์บอร์ดรายงาน 15 นาที</button
+          ><button id="reportInputDisable" class="secondary">
+            หยุดเมาส์/คีย์บอร์ดรายงาน
+          </button>
+        </div>
+        <p id="reportInputStatus" role="status">โหมดเมาส์/คีย์บอร์ดรายงานยังไม่เปิด</p>
+      </section>
+      <section>
+        <h2>ควบคุมหน้า Meta ผ่าน Extension</h2>
+        <p>
+          เปิดรับคำสั่งบอทและผูกแท็บก่อน บอทจะดูหน้า คลิก กรอก เลือกค่า
+          และอัปโหลดไฟล์ผ่านหน้าเว็บ ไม่ใช้ Meta API
+        </p>
+        <p class="note">
+          โหมดควบคุมอนุญาตแก้ข้อมูลบนบัญชีจริง ฟอร์มบางชนิดอาจบันทึกทันที
+          การอนุมัติปุ่มสำคัญอาศัยชื่อปุ่มที่อ่านได้ จึงต้องตรวจผลบน Meta ด้วย
+        </p>
+        <div class="actions">
+          <button id="inspectUi" class="secondary">อ่านองค์ประกอบหน้า</button
+          ><button id="controlEnable">เปิดโหมดควบคุม 15 นาที</button
+          ><button id="controlDisable" class="secondary">หยุดการแก้ไข</button>
+        </div>
+        <p id="controlStatus" role="status">โหมดอ่านข้อมูล</p>
+        <p id="uiStatus" role="status">ยังไม่มีผลการควบคุม</p>
+        <div id="approvalBox" hidden>
+          <h3>ตรวจคำสั่งก่อนให้บอทดำเนินการ</h3>
+          <pre id="approvalText"></pre>
+          <div class="actions">
+            <button id="approveUi">อนุมัติคำสั่งนี้ครั้งเดียว</button
+            ><button id="rejectUi" class="secondary">ปฏิเสธ</button>
+          </div>
+        </div>
+      </section>
+      <section>
+        <h2>นำเข้ารายงาน Meta</h2>
+        <p>ใช้ CSV เพื่อเก็บข้อมูลย้อนหลัง ตรวจหัวคอลัมน์ตามไฟล์ตัวอย่างก่อนนำเข้า</p>
+        <label class="file"
+          >เลือกไฟล์ CSV<input type="file" id="file" accept=".csv,text/csv"
+        /></label>
+        <div class="fields">
+          <label>Timezone<input id="timezone" value="Asia/Bangkok" /></label
+          ><label
+            >Attribution<input
+              id="attribution"
+              placeholder="เช่น 7-day click, 1-day view" /></label
+          ><label
+            >ชนิดผลลัพธ์<input
+              id="resultType"
+              placeholder="เช่น messaging_conversation" /></label
+          ><label
+            >จำนวนแถวต้นทาง<input
+              id="rows"
+              type="number"
+              min="1"
+              placeholder="ไม่รวมแถวสรุป" /></label
+          ><label
+            >Spend รวมต้นทาง<input
+              id="spend"
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="ใช้เงื่อนไขเดียวกัน"
+          /></label>
+        </div>
+        <button id="validate">ตรวจสอบไฟล์</button>
+        <div id="report" aria-live="polite">
+          <p class="empty">ยังไม่มีข้อมูลที่ตรวจสอบ</p>
+        </div>
+      </section>
+      <section>
+        <h2>บันทึกและส่งออก</h2>
+        <div class="actions">
+          <button id="sync" disabled>บันทึกลง Database</button
+          ><button id="export" class="secondary" disabled>
+            ส่งออก JSON ที่ตรวจแล้ว</button
+          ><button id="exportCsv" class="secondary" disabled>ส่งออก CSV</button
+          ><button id="dbExport" class="secondary">ส่งออกจาก Database</button>
+        </div>
+      </section>
+      <p id="status" role="status">พร้อมเริ่ม • ยังไม่ได้เชื่อมต่อ Meta</p>
+      <footer>
+        ข้อมูลที่อ่านจากหน้าเว็บมีขอบเขตเฉพาะส่วนที่แสดง ความครบทั้งบัญชียังไม่ยืนยัน
+      </footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

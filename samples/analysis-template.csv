@@ -1,0 +1,2 @@
+account_id,campaign_id,campaign_name,ad_set_id,ad_set_name,ad_id,ad_name,date_start,date_end,currency,timezone,attribution,result_type,spend,impressions,reach,link_clicks,results,messaging_conversations,leads,purchases,purchase_value,landing_page_views,adds_to_cart,checkouts_initiated,link_ctr,link_cpc,cpm,frequency,cost_per_result,budget,status
+123456789,111,Sample campaign,222,Sample ad set,333,Sample ad,2026-11-01,2026-11-01,THB,Asia/Bangkok,7-day click,messaging_conversations,200,10000,8000,100,20,20,5,2,600,80,10,4,1,2,20,1.25,10,500,active

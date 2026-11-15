@@ -1,0 +1,51 @@
+{
+  "name": "meta-ads-data-collector",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsx scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "dev:api": "tsx --env-file=.env apps/api/src/server.ts",
+    "db:migrate": "tsx --env-file=.env scripts/migrate.ts",
+    "check": "npm run typecheck && npm test && npm run build",
+    "test:api": "tsx --env-file=.env tests/api.integration.ts",
+    "test:browser": "tsx --env-file=.env tests/browser.integration.ts",
+    "format": "prettier --write \"apps/**/*.{ts,tsx,html,css,json}\" \"packages/**/*.ts\" \"scripts/**/*.ts\" \"tests/**/*.ts\" \"*.json\"",
+    "bot": "tsx --env-file=.env scripts/bot.ts",
+    "test:ui": "tsx --env-file=.env tests/ui.browser.integration.ts",
+    "health": "tsx --env-file=.env scripts/health.ts",
+    "dev:web": "npm run dev --workspace=@meta-collector/web",
+    "build:web": "npm run build --workspace=@meta-collector/web",
+    "start:web": "npm run start --workspace=@meta-collector/web",
+    "typecheck:web": "npm run typecheck --workspace=@meta-collector/web",
+    "build:all": "npm run build && npm run build:web",
+    "test:web": "node --env-file=.env tests/web.integration.mjs",
+    "test:connect": "node --env-file=.env tests/connect.browser.integration.mjs",
+    "test:reader": "node tests/reader.browser.integration.mjs",
+    "test:analysis": "node --env-file=.env tests/analysis.api.integration.mjs",
+    "test:report-columns": "node tests/report-columns.browser.integration.mjs",
+    "test:report-input": "node tests/report-input.browser.integration.mjs"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "papaparse": "^5.5.3",
+    "pg": "^8.16.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@types/chrome": "^0.1.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/papaparse": "^5.3.16",
+    "@types/pg": "^8.15.0",
+    "esbuild": "^0.25.0",
+    "prettier": "^3.10.1",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "workspaces": [
+    "apps/web"
+  ]
+}

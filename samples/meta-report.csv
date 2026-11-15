@@ -1,0 +1,3 @@
+account_id,campaign_id,campaign_name,ad_set_id,ad_set_name,ad_id,ad_name,date_start,date_end,currency,spend,impressions,reach,results,link_clicks,creative_body,creative_headline,creative_cta,creative_destination_url
+123456789,111,Sample campaign,222,Sample ad set,333,Sample ad,2026-11-01,2026-11-01,THB,150.50,1000,800,12,30,Example permitted ad text,Sample headline,LEARN_MORE,https://example.com/product
+123456789,111,Sample campaign,222,Sample ad set,334,Sample ad two,2026-11-01,2026-11-01,THB,49.50,400,350,4,10,Another permitted text,Second headline,LEARN_MORE,https://example.com/product

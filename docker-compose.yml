@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: collector
+      POSTGRES_PASSWORD: collector_local
+      POSTGRES_DB: meta_collector
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - collector_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U collector -d meta_collector"]
+      interval: 5s
+      retries: 10
+volumes:
+  collector_data:
