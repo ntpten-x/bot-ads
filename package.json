@@ -10,6 +10,7 @@
     "db:migrate": "tsx --env-file=.env scripts/migrate.ts",
     "check": "npm run typecheck && npm test && npm run build",
     "test:api": "tsx --env-file=.env tests/api.integration.ts",
+    "test:captures": "tsx --env-file=.env tests/captures.api.integration.ts",
     "test:browser": "tsx --env-file=.env tests/browser.integration.ts",
     "format": "prettier --write \"apps/**/*.{ts,tsx,html,css,json}\" \"packages/**/*.ts\" \"scripts/**/*.ts\" \"tests/**/*.ts\" \"*.json\"",
     "bot": "tsx --env-file=.env scripts/bot.ts",

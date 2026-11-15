@@ -6,6 +6,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { importSchema, parseReport } from "../../../packages/core/src/index.js";
 import { botCommandSchema } from "../../../packages/core/src/control.js";
 import { pool, saveImport } from "./store.js";
+import { captureRoutes, persistJob } from "./captures.js";
 const token = process.env.API_TOKEN;
 if (!token || token.length < 32)
   throw new Error("API_TOKEN must be at least 32 characters");
@@ -30,6 +31,7 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: "12mb" }));
 app.use(dashboardRoutes(pool));
+app.use(captureRoutes(pool));
 app.get("/health", async (_req, res) => {
   await pool.query("SELECT 1");
   res.json({ status: "ready" });
@@ -161,7 +163,25 @@ app.post("/devices/:device/state", async (req, res) => {
     "INSERT INTO bot_devices(id,state) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET state=excluded.state,updated_at=now()",
     [device, JSON.stringify(state)],
   );
-  res.json({ ok: true });
+  // Every capture reported by the Extension is stored as a raw record in PostgreSQL.
+  let captures: { stored: number } | { error: string } = { stored: 0 };
+  if (state.job)
+    try {
+      captures = await persistJob(
+        pool,
+        device,
+        state.bound_account,
+        state.job,
+        state.extension_version,
+      );
+    } catch (e) {
+      console.error(
+        "Capture persistence failed",
+        e instanceof Error ? e.message : "Unknown",
+      );
+      captures = { error: "capture_persistence_failed" };
+    }
+  res.json({ ok: true, captures });
 });
 app.get("/devices/:device/state", async (req, res) => {
   const device = z.uuid().parse(req.params.device);

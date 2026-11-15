@@ -8,7 +8,11 @@ try {
   await client.query(
     "CREATE TABLE IF NOT EXISTS schema_migrations(name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())",
   );
-  for (const name of ["001_initial", "002_bot_control"]) {
+  for (const name of [
+    "001_initial",
+    "002_bot_control",
+    "003_dom_captures",
+  ]) {
     const { rowCount } = await client.query(
       "SELECT 1 FROM schema_migrations WHERE name=$1",
       [name],
