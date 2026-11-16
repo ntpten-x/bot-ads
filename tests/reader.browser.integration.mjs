@@ -14,9 +14,11 @@ let fixture = "";
 await page.route("https://adsmanager.facebook.com/**", (route) =>
   route.fulfill({ contentType: "text/html; charset=utf-8", body: fixture }),
 );
-async function read(html, path = "/adsmanager/manage/campaigns", prepare) {
+async function read(html, path = "/adsmanager/manage/campaigns", prepare, query = "") {
   fixture = html;
-  await page.goto(`https://adsmanager.facebook.com${path}?act=123456789`);
+  await page.goto(
+    `https://adsmanager.facebook.com${path}?act=123456789${query}`,
+  );
   await page.addScriptTag({ content: bundle.outputFiles[0].text });
   if (prepare) await page.evaluate(prepare);
   return page.evaluate(() => ReaderFixture.readVisibleTable());
@@ -86,7 +88,7 @@ try {
       .join("")}
     <input type="password" value="never-export" style="position:absolute;left:810px;top:65px">
   </div>`);
-  expect(geometry.reader_version).toBe("0.6.5");
+  expect(geometry.reader_version).toBe("0.6.22");
   expect(geometry.row_observations).toHaveLength(2);
   expect(geometry.row_observations.map((r) => r.name)).toEqual([
     "Same ad name",
@@ -109,6 +111,52 @@ try {
   expect(JSON.stringify(geometry.row_observations)).not.toContain(
     "never-export",
   );
+  const ageBreakdown = await read(
+    `<div id="report" style="position:relative;width:960px;height:420px">
+    <div role="columnheader" style="position:absolute;left:0;top:0;width:40px;height:40px">On / Off</div>
+    <div role="columnheader" style="position:absolute;left:40px;top:0;width:300px;height:40px">โฆษณา</div>
+    <div role="columnheader" style="position:absolute;left:340px;top:0;width:180px;height:40px">จำนวนเงินที่ใช้จ่ายไป</div>
+    <div role="columnheader" style="position:absolute;left:520px;top:0;width:160px;height:40px">อิมเพรสชัน</div>
+    <div role="columnheader" style="position:absolute;left:680px;top:0;width:160px;height:40px">ผลลัพธ์</div>
+    <div role="columnheader" style="position:absolute;left:840px;top:0;width:100px;height:40px">การแสดงโฆษณา</div>
+    <input type="checkbox" style="position:absolute;left:10px;top:60px">
+    <a href="https://adsmanager.facebook.com/adsmanager/manage/ads/edit?act=123456789&selected_campaign_ids=111&selected_adset_ids=222&selected_ad_ids=333" style="position:absolute;left:50px;top:56px">Breakdown ad</a>
+    <div style="position:absolute;left:350px;top:56px">฿100.00</div><div style="position:absolute;left:530px;top:56px">1,000</div><div style="position:absolute;left:690px;top:56px">10 msg</div><div style="position:absolute;left:850px;top:56px">Active</div>
+    <div style="position:absolute;left:50px;top:100px">18–24</div><div style="position:absolute;left:350px;top:100px">฿40.00</div><div style="position:absolute;left:530px;top:100px">400</div><div style="position:absolute;left:690px;top:100px">4</div>
+    <div style="position:absolute;left:50px;top:140px">25–34</div><div style="position:absolute;left:350px;top:140px">฿60.00</div><div style="position:absolute;left:530px;top:140px">600</div><div style="position:absolute;left:690px;top:140px">6</div>
+  </div>`,
+    "/adsmanager/manage/ads",
+    undefined,
+    "&demographics_breakdown=age",
+  );
+  expect(ageBreakdown.breakdown_diagnostics.active).toEqual([
+    { key: "demographics_breakdown", value: "age" },
+  ]);
+  expect(ageBreakdown.row_observations).toHaveLength(2);
+  expect(
+    ageBreakdown.row_observations.map(
+      (row) => row.cells.find((cell) => cell.header === "อายุ")?.text,
+    ),
+  ).toEqual(["18–24", "25–34"]);
+  expect(
+    ageBreakdown.row_observations.every(
+      (row) => row.identity === "333" && row.column_mapping === "verified_geometry",
+    ),
+  ).toBe(true);
+  expect(
+    ageBreakdown.row_observations[0].cells.find(
+      (cell) => cell.header === "จำนวนเงินที่ใช้จ่ายไป",
+    )?.text,
+  ).toBe("฿40.00");
+  expect(
+    ageBreakdown.row_observations.every((row) =>
+      row.cells.some(
+        (cell) =>
+          cell.header === "result_type" &&
+          cell.text === "msg",
+      ),
+    ),
+  ).toBe(true);
   const scrolling =
     await read(`<div id="scroller" style="width:500px;height:150px;overflow:auto"><div style="width:1400px;height:600px">
     <div role="columnheader" style="width:200px;height:40px">Ad</div><div role="columnheader" style="width:200px;height:40px">Spend</div>
@@ -250,7 +298,7 @@ try {
     </div>
   </div>`;
   const live = await read(liveShaped);
-  expect(live.reader_version).toBe("0.6.5");
+  expect(live.reader_version).toBe("0.6.22");
   expect(live.row_observations.map((r) => r.name)).toEqual(["Fixture 0", "Fixture 1", "Fixture 2", "Fixture 3"]);
   expect(live.row_observations[0].cells.find((c) => c.header === "แคมเปญ").text).toBe("Fixture 0");
   expect(live.row_observations[3].cells.find((c) => c.header === "แคมเปญ").text).toBe("Fixture 3");

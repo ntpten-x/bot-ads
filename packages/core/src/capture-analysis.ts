@@ -7,6 +7,7 @@ import {
   type CaptureLevel,
   type CaptureRow,
   type DomSnapshot,
+  type OperatorContext,
 } from "./dom-capture";
 
 /**
@@ -446,7 +447,7 @@ const levelThai: Record<CaptureLevel, string> = {
 type AnalysisOptions = {
   min_results?: number;
   high_cost_ratio?: number;
-  operator?: { timezone?: string; attribution?: string };
+  operator?: OperatorContext;
 };
 const knownText = (v: unknown): v is string =>
   typeof v === "string" &&
@@ -498,8 +499,12 @@ function contextFor(snapshot: DomSnapshot, options: AnalysisOptions = {}) {
       : knownText(options.operator?.attribution)
         ? options.operator.attribution.trim()
         : null,
-    breakdown: explicitScopeValue(ctx.breakdown ?? snapshot.breakdown),
-    filters: explicitScopeValue(ctx.filters ?? snapshot.filters, true),
+    breakdown:
+      explicitScopeValue(ctx.breakdown ?? snapshot.breakdown) ??
+      (options.operator?.confirm_no_breakdown === true ? {} : null),
+    filters:
+      explicitScopeValue(ctx.filters ?? snapshot.filters, true) ??
+      (options.operator?.confirm_no_filters === true ? [] : null),
     column_preset_label: ctx.column_preset_label ?? null,
   };
 }
@@ -536,6 +541,23 @@ function scopedSnapshots(snapshots: DomSnapshot[]) {
     [/^(?:publisher platform|แพลตฟอร์มผู้เผยแพร่)$/i, "publisher_platform"],
     [/^(?:device platform|แพลตฟอร์มอุปกรณ์)$/i, "device_platform"],
   ];
+  const attributionById = new Map<string, Set<string>>();
+  for (const snapshot of snapshots) {
+    for (const row of snapshot.row_observations) {
+      if (!row.identity) continue;
+      const values = row.cells
+        .filter(
+          (cell) =>
+            canonicalHeader(cell.header) === "attribution" &&
+            knownText(cell.text),
+        )
+        .map((cell) => cell.text.trim());
+      if (values.length !== 1) continue;
+      const known = attributionById.get(row.identity) ?? new Set<string>();
+      known.add(values[0]);
+      attributionById.set(row.identity, known);
+    }
+  }
   return snapshots.flatMap((snapshot) => {
     const groups = new Map<
       string,
@@ -552,10 +574,15 @@ function scopedSnapshots(snapshots: DomSnapshot[]) {
             canonicalHeader(c.header) === "attribution" && knownText(c.text),
         )
         .map((c) => c.text.trim());
+      const knownById = row.identity
+        ? attributionById.get(row.identity)
+        : undefined;
       const attribution =
         new Set(attributes).size === 1
           ? attributes[0]
-          : (snapshot.reporting_context?.attribution ?? "unverified");
+          : knownById?.size === 1
+            ? [...knownById][0]
+            : (snapshot.reporting_context?.attribution ?? "unverified");
       const dimensions: Record<string, string> = {};
       for (const cell of row.cells) {
         const field = dimensionNames.find(([pattern]) =>
@@ -567,9 +594,12 @@ function scopedSnapshots(snapshots: DomSnapshot[]) {
         snapshot.reporting_context?.breakdown ?? snapshot.breakdown,
       );
       const breakdown =
-        base === null
-          ? null
-          : { ...(base as Record<string, unknown>), ...dimensions };
+        Object.keys(dimensions).length > 0
+          ? {
+              ...((base as Record<string, unknown> | null) ?? {}),
+              ...dimensions,
+            }
+          : base;
       const context = {
         ...snapshot.reporting_context,
         attribution,

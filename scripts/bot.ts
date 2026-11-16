@@ -8,6 +8,14 @@ if (!token) throw new Error("API_TOKEN required");
 let path = "commands";
 let body: unknown;
 switch (command) {
+  case "breakdown":
+    body = {
+      command: "breakdown.prepare",
+      dimensions: args.length
+        ? args
+        : ["age", "gender", "platform", "placement"],
+    };
+    break;
   case "prepare":
     body = { command: "report.prepare", goal: args[0] ?? "messages" };
     break;
@@ -54,7 +62,7 @@ switch (command) {
     break;
   default:
     throw new Error(
-      "Usage: npm run bot -- DEVICE_UUID prepare|collect|start|pause|resume|status|state|inspect|focus|screenshot|navigate|send|result [args]",
+      "Usage: npm run bot -- DEVICE_UUID prepare|breakdown|collect|start|pause|resume|status|state|inspect|focus|screenshot|navigate|send|result [args]",
     );
 }
 if (body) body = botCommandSchema.parse(body);

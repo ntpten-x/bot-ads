@@ -1,11 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { botCommandSchema, suiteUrl } from "../packages/core/src/control.js";
+import {
+  botCommandSchema,
+  reportingUrl,
+  suiteUrl,
+} from "../packages/core/src/control.js";
 test("accept typed UI commands and refuse JS, selectors and remote approvals", () => {
   assert.equal(
     botCommandSchema.safeParse({
       command: "ui.action",
       action: { type: "inspect" },
+    }).success,
+    true,
+  );
+  assert.equal(
+    botCommandSchema.safeParse({
+      command: "breakdown.prepare",
+      dimensions: ["age", "platform"],
     }).success,
     true,
   );
@@ -16,6 +27,18 @@ test("accept typed UI commands and refuse JS, selectors and remote approvals", (
     { command: "uiSession", action: "approve" },
     { command: "ui.action", action: { type: "click", selector: "button" } },
     { command: "ui.action", action: { type: "inspect" }, tabId: 999 },
+    {
+      command: "breakdown.prepare",
+      dimensions: ["age", "age"],
+    },
+    {
+      command: "breakdown.prepare",
+      dimensions: ["age", "selector"],
+    },
+    {
+      command: "breakdown.prepare",
+      dimensions: ["age", "gender"],
+    },
   ])
     assert.equal(botCommandSchema.safeParse(command).success, false);
 });
@@ -48,5 +71,24 @@ test("restrict web navigation to the bound account on UI hosts and routes", () =
       "123",
       true,
     ),
+  );
+});
+
+test("reporting URLs preserve only validated breakdown parameters", () => {
+  const url = reportingUrl("123", "ads", [
+    ["demographics_breakdown", "age"],
+    ["publisher_platform_breakdown", "platform"],
+  ]);
+  assert.equal(url.searchParams.get("act"), "123");
+  assert.equal(url.searchParams.get("demographics_breakdown"), "age");
+  assert.equal(
+    url.searchParams.get("publisher_platform_breakdown"),
+    "platform",
+  );
+  assert.throws(() =>
+    reportingUrl("123", "ads", [["redirect", "https://example.com"]]),
+  );
+  assert.throws(() =>
+    reportingUrl("123", "ads", [["demographics_breakdown", "age&evil=1"]]),
   );
 });

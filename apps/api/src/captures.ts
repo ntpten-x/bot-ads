@@ -413,10 +413,29 @@ export function captureRoutes(pool: Pool) {
       "SELECT job_id,max(captured_at) AS captured_at,count(*)::int AS snapshots FROM capture_snapshots WHERE bound_account=$1 AND job_id IS NOT NULL GROUP BY job_id ORDER BY max(captured_at) DESC LIMIT 20",
       [account],
     );
+    const confirm = (value: unknown) =>
+      value === "true" ? (true as const) : undefined;
+    const operator = operatorContextSchema.parse({
+      ...(typeof req.query.timezone === "string"
+        ? { timezone: req.query.timezone }
+        : {}),
+      ...(typeof req.query.attribution === "string"
+        ? { attribution: req.query.attribution }
+        : {}),
+      ...(typeof req.query.result_type === "string"
+        ? { result_type: req.query.result_type }
+        : {}),
+      ...(confirm(req.query.confirm_no_breakdown)
+        ? { confirm_no_breakdown: true }
+        : {}),
+      ...(confirm(req.query.confirm_no_filters)
+        ? { confirm_no_filters: true }
+        : {}),
+    });
     res.json({
       job: meta.rows[0],
       jobs: jobs.rows,
-      ...analyzeCaptureJob(snapshots),
+      ...analyzeCaptureJob(snapshots, { operator }),
     });
   });
   router.get("/captures", async (req, res) => {

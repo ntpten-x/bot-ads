@@ -7,6 +7,143 @@ import {
 } from "./report-probe.js";
 type Binding = { tabId: number; account: string; enabled: boolean };
 
+/** One native horizontal page under the same local report lease and
+ * job/account guards as vertical paging. Coordinates and deltas are computed
+ * locally from the current reporting view.
+ */
+export async function scrollReportColumnsWithInput(
+  binding: Binding & { jobId: string },
+) {
+  const source = { tabId: binding.tabId };
+  let attached = false;
+  const deadline = Date.now() + 6000;
+  const stopped = (reason: string) => ({
+    moved: false as const,
+    method: "none" as const,
+    reason,
+  });
+  const guard = async () => {
+    const { reportInputLease } =
+      await chrome.storage.session.get("reportInputLease");
+    const lease = reportInputLease as
+      | { tabId?: number; account?: string; expires_at?: number }
+      | undefined;
+    if (Date.now() >= deadline) throw new Error("reporting_input_timeout");
+    if (
+      !binding.enabled ||
+      !lease ||
+      lease.tabId !== binding.tabId ||
+      lease.account !== binding.account ||
+      typeof lease.expires_at !== "number" ||
+      lease.expires_at <= Date.now()
+    )
+      throw new Error("report_input_lease_required");
+    const tab = await chrome.tabs.get(binding.tabId);
+    const url = new URL(tab.url ?? "");
+    if (
+      !tab.active ||
+      url.protocol !== "https:" ||
+      url.port ||
+      !["adsmanager.facebook.com", "business.facebook.com"].includes(
+        url.hostname,
+      ) ||
+      !/^\/adsmanager\/manage\/(campaigns|adsets|ads)\/?$/.test(url.pathname) ||
+      url.searchParams.get("act") !== binding.account
+    )
+      throw new Error("reporting_context_changed");
+    const current = await chrome.storage.local.get(["bridge", "job"]);
+    const bridge = current.bridge as Partial<Binding> | undefined;
+    const job = current.job as
+      | { id?: string; status?: string; tabId?: number; account?: string }
+      | undefined;
+    if (
+      !bridge?.enabled ||
+      bridge.tabId !== binding.tabId ||
+      bridge.account !== binding.account ||
+      job?.id !== binding.jobId ||
+      job.status !== "running" ||
+      job.tabId !== binding.tabId ||
+      job.account !== binding.account
+    )
+      throw new Error("collection_context_changed");
+  };
+  const observe = async () => {
+    await guard();
+    const [result] = await chrome.scripting.executeScript({
+      target: source,
+      func: probeReportingScroll,
+      args: [binding.account],
+    });
+    return result?.result;
+  };
+  try {
+    const before = await observe();
+    if (!before?.ready) return stopped(before?.reason ?? "no_reporting_observation");
+    await guard();
+    await chrome.debugger.attach(source, "1.3");
+    attached = true;
+    const planned = await observe();
+    if (!planned?.ready || planned.signature !== before.signature)
+      return stopped("reporting_view_changed_before_input");
+    for (const target of planned.targets.slice(0, 4)) {
+      await guard();
+      await chrome.debugger.sendCommand(source, "Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: target.x,
+        y: target.y,
+      });
+      const hovered = await observe();
+      if (!hovered?.ready) return stopped(hovered?.reason ?? "no_reporting_observation");
+      if (hovered.signature !== before.signature)
+        return stopped("reporting_view_changed_before_input");
+      const point = hovered.targets.find(
+        (candidate) =>
+          candidate.band_index === target.band_index &&
+          candidate.column_kind === target.column_kind,
+      );
+      if (!point) return stopped("reporting_target_changed");
+      await guard();
+      await chrome.debugger.sendCommand(source, "Input.dispatchMouseEvent", {
+        type: "mouseWheel",
+        x: point.x,
+        y: point.y,
+        deltaX: hovered.deltaX,
+        deltaY: 0,
+      });
+      const observeUntil = Math.min(deadline, Date.now() + 1200);
+      do {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        const after = await observe();
+        if (!after?.ready)
+          return stopped(after?.reason ?? "no_reporting_observation");
+        if (after.signature !== before.signature && after.horizontal_signature === before.horizontal_signature)
+          return stopped("reporting_rows_changed_without_columns");
+        if (after.horizontal_signature !== before.horizontal_signature)
+          return {
+            moved: true as const,
+            method: "native_horizontal_wheel" as const,
+            target_diagnostics: after.target_diagnostics,
+          };
+      } while (Date.now() < observeUntil);
+    }
+    return stopped("visible_columns_unchanged");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "reporting_input_failed";
+    return stopped(
+      [
+        "report_input_lease_required",
+        "reporting_context_changed",
+        "reporting_input_timeout",
+        "collection_context_changed",
+      ].includes(reason)
+        ? reason
+        : "native_horizontal_wheel_failed",
+    );
+  } finally {
+    if (attached) await chrome.debugger.detach(source).catch(() => {});
+  }
+}
+
 /** One native vertical page under the popup's existing local report lease.
  * No caller-provided coordinates, methods, deltas or JavaScript are accepted.
  */
@@ -17,19 +154,24 @@ export async function scrollReportWithInput(
   let attached = false;
   const deadline = Date.now() + 5000;
   type ScrollObservation = ReturnType<typeof probeReportingScroll>;
-  type TargetDiagnostics = Extract<
-    ScrollObservation,
-    { target_diagnostics: unknown }
-  >["target_diagnostics"];
+  type TargetDiagnostics = NonNullable<
+    Extract<ScrollObservation, { ready: true }>["target_diagnostics"]
+  > & { attempted_bands: typeof attempted };
   const attempted: {
     band_index: number;
     column_kind: string;
     outcome: "unchanged" | "moved" | "unverified";
   }[] = [];
-  const diagnostics = (observation: ScrollObservation | undefined) =>
-    observation && "target_diagnostics" in observation
-      ? { ...observation.target_diagnostics, attempted_bands: [...attempted] }
+  const diagnostics = (observation: ScrollObservation | undefined) => {
+    if (!observation || !("target_diagnostics" in observation))
+      return undefined;
+    return observation.target_diagnostics
+      ? ({
+          ...observation.target_diagnostics,
+          attempted_bands: [...attempted],
+        } satisfies TargetDiagnostics)
       : undefined;
+  };
   const stopped = (reason: string, target_diagnostics?: TargetDiagnostics) => ({
     moved: false as const,
     method: "none" as const,
@@ -257,6 +399,7 @@ export async function prepareReportWithInput(
     debug?: unknown;
   };
   const trace: TraceEntry[] = [];
+  const selectedQueries = new Map<string, string>();
   let phase = "inspect";
   let activeField: ReportField | undefined;
   const record = (entry: TraceEntry) => {
@@ -272,6 +415,7 @@ export async function prepareReportWithInput(
   const fields = getReportFields(goal),
     selected: string[] = [],
     missing: string[] = [];
+  const blocking = (field: ReportField) => field.blocking ?? field.required;
   const guard = async () => {
     if (Date.now() > deadline)
       throw new Error("Report input timed out; inspect the Meta dialog");
@@ -389,7 +533,10 @@ export async function prepareReportWithInput(
     }
     return p;
   };
-  const locateField = async (field: ReportField) => {
+  const locateField = async (
+    field: ReportField,
+    preferredQuery?: string,
+  ) => {
     let p: ReportProbe = {
       kind: "missing",
       reason: "Report field not observed",
@@ -397,12 +544,15 @@ export async function prepareReportWithInput(
     const search = await probe("search");
     if (search.kind !== "fill") return probe("field", field);
     const thaiFirst = search.locale === "th";
-    const queries = [
+    const queries = preferredQuery
+      ? [preferredQuery]
+      : [
       ...new Set([
         ...(thaiFirst ? field.labels.filter((l) => /[ก-๙]/.test(l)) : []),
+        ...(field.search_terms ?? []),
         ...field.labels,
       ]),
-    ];
+        ];
     for (const query of queries) {
       const before = await probe("search");
       if (before.kind !== "fill") break;
@@ -485,7 +635,10 @@ export async function prepareReportWithInput(
       }
       expectedQuery = query;
       p = await probe("field", field);
-      if (p.kind === "click" || p.kind === "selected") break;
+      if (p.kind === "click" || p.kind === "selected") {
+        selectedQueries.set(field.key, query);
+        break;
+      }
     }
     return p;
   };
@@ -522,7 +675,7 @@ export async function prepareReportWithInput(
     phase = "select_required";
     for (const field of options.visibleOnly
       ? []
-      : fields.filter((f) => f.required && !selected.includes(f.key))) {
+      : fields.filter((f) => blocking(f) && !selected.includes(f.key))) {
       activeField = field;
       let p = await locateField(field);
       if (p.kind === "click") {
@@ -538,11 +691,11 @@ export async function prepareReportWithInput(
     // An earlier check is not proof that selection survived a filtered rerender.
     // Revisit every required control without clicking it before committing.
     phase = "verify_required";
-    for (const field of fields.filter((f) => f.required)) {
+    for (const field of fields.filter(blocking)) {
       activeField = field;
       const current = options.visibleOnly
         ? await probe("field", field)
-        : await locateField(field);
+        : await locateField(field, selectedQueries.get(field.key));
       if (current.kind !== "selected") {
         const index = selected.indexOf(field.key);
         if (index >= 0) selected.splice(index, 1);
@@ -557,7 +710,7 @@ export async function prepareReportWithInput(
         debug: current.diagnostics,
       });
     }
-    if (fields.some((f) => f.required && !selected.includes(f.key)))
+    if (fields.some((f) => blocking(f) && !selected.includes(f.key)))
       throw new Error(
         "คอลัมน์จำเป็นยังเลือกไม่ครบหรือยืนยันสถานะไม่ได้ จึงไม่บันทึกมุมมองรายงาน",
       );
@@ -571,7 +724,12 @@ export async function prepareReportWithInput(
       selected,
       missing,
       missing_required: fields
-        .filter((f) => f.required && missing.includes(f.key))
+        .filter((f) => blocking(f) && missing.includes(f.key))
+        .map((f) => f.key),
+      missing_goal_metrics: fields
+        .filter(
+          (f) => f.required && !blocking(f) && missing.includes(f.key),
+        )
         .map((f) => f.key),
       applied: closed.kind === "done",
       trace,
@@ -587,7 +745,12 @@ export async function prepareReportWithInput(
       selected,
       missing,
       missing_required: fields
-        .filter((f) => f.required && !selected.includes(f.key))
+        .filter((f) => blocking(f) && !selected.includes(f.key))
+        .map((f) => f.key),
+      missing_goal_metrics: fields
+        .filter(
+          (f) => f.required && !blocking(f) && !selected.includes(f.key),
+        )
         .map((f) => f.key),
       applied: false,
       trace,

@@ -491,6 +491,78 @@ test("row attribution and result type determine comparable groups without cross-
   assert.ok(job.levels.every((l) => l.result_groups[0].results === 10));
 });
 
+test("stable IDs fill unknown attribution from another compatible horizontal slice", () => {
+  const metrics = verified("111", "10", "100");
+  metrics.cells = metrics.cells.filter(
+    (cell) => cell.header !== "Attribution setting",
+  );
+  const attribution = {
+    ...verified("111", "10", "100"),
+    cells: [
+      { header: "Ad", text: "Verified fixture" },
+      { header: "Amount spent", text: "100" },
+      { header: "Attribution setting", text: "7-day click" },
+    ],
+  };
+  const baseContext = {
+    date_range_label: "Nov 14, 2026 – Nov 14, 2026",
+    currency: "THB",
+    timezone: "Asia/Bangkok",
+    attribution: "unverified",
+    breakdown: {},
+    filters: [],
+  };
+  const first = snap([metrics], {
+    page: "/adsmanager/manage/ads",
+    row_observations: [metrics],
+    reporting_context: baseContext,
+  });
+  const second = snap([attribution], {
+    page: "/adsmanager/manage/ads",
+    captured_at: "2026-11-15T16:46:35.000Z",
+    row_observations: [attribution],
+    reporting_context: baseContext,
+  });
+  const result = analyzeCaptureLevel("ads", [first, second]);
+  assert.equal(result.unique_rows, 1);
+  assert.equal(result.context.attribution, "7-day click");
+  assert.equal(result.rows[0].spend, 100);
+  assert.equal(result.rows[0].results, 10);
+});
+
+test("explicit operator timezone and no-scope confirmations enable compatible ranking", () => {
+  const capture = scoped(
+    Array.from({ length: 5 }, (_, index) =>
+      verified(String(700 + index), String(5 + index), String(100 + index)),
+    ),
+    {
+      reporting_context: {
+        date_range_label: "Nov 14, 2026 – Nov 14, 2026",
+        currency: "THB",
+        timezone: "unverified",
+        attribution: "7-day click",
+        breakdown: null,
+        filters: null,
+      },
+    },
+  );
+  const withoutContext = analyzeCaptureLevel("campaigns", [capture]);
+  assert.equal(withoutContext.ranking.eligible, 0);
+  assert.ok(withoutContext.blockers.includes("timezone_unverified"));
+  const withContext = analyzeCaptureLevel("campaigns", [capture], {
+    operator: {
+      timezone: "Asia/Bangkok",
+      confirm_no_breakdown: true,
+      confirm_no_filters: true,
+    },
+  });
+  assert.equal(withContext.context.timezone, "Asia/Bangkok");
+  assert.deepEqual(withContext.context.breakdown, {});
+  assert.deepEqual(withContext.context.filters, []);
+  assert.ok(withContext.ranking.eligible >= 3);
+  assert.ok(!withContext.blockers.includes("timezone_unverified"));
+});
+
 test("later explicit metric values replace stale values, including unknowns, within one reporting scope", () => {
   const first = scoped([verified("111", "5", "50")]);
   const later = scoped([verified("111", "10", "—")], {
@@ -600,6 +672,19 @@ test("visible row breakdown overrides an empty context and partitions dimensions
     job.levels.map((l) => l.context.breakdown),
     [{ age: "25-34" }, { age: "35-44" }],
   );
+  const nullBase = snap([first], {
+    reporting_context: {
+      date_range_label: "Nov 14, 2026 – Nov 14, 2026",
+      currency: "THB",
+      timezone: "Asia/Bangkok",
+      attribution: "7-day click",
+      breakdown: null,
+      filters: [],
+    },
+  });
+  const direct = analyzeCaptureLevel("campaigns", [nullBase]);
+  assert.deepEqual(direct.context.breakdown, { age: "25-34" });
+  assert.ok(!direct.blockers.includes("breakdown_unverified"));
 });
 
 test("explicit vertical row misalignment blocks identity-bound metrics despite a forged verified mapping", () => {

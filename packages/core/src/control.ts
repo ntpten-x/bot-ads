@@ -85,6 +85,33 @@ export const uiCommandSchema = z.discriminatedUnion("command", [
 export const botCommandSchema = z.union([
   z
     .object({
+      command: z.literal("breakdown.prepare"),
+      dimensions: z
+        .array(
+          z.enum(["age", "gender", "platform", "placement"]),
+        )
+        .max(4),
+    })
+    .strict()
+    .refine(
+      (value) => new Set(value.dimensions).size === value.dimensions.length,
+      {
+        message: "Breakdown dimensions must be unique",
+      },
+    )
+    .refine(
+      (value) =>
+        !(
+          value.dimensions.includes("age") &&
+          value.dimensions.includes("gender")
+        ),
+      {
+        message:
+          "Age and Gender are mutually exclusive demographics breakdowns in Meta",
+      },
+    ),
+  z
+    .object({
       command: z.literal("report.prepare"),
       goal: z.enum(["messages", "sales", "leads"]),
     })
@@ -105,6 +132,27 @@ export const botCommandSchema = z.union([
   z.object({ command: z.literal("status") }).strict(),
   uiCommandSchema,
 ]);
+export type BreakdownQueryParam = readonly [string, string];
+export function reportingUrl(
+  account: string,
+  level: "campaigns" | "adsets" | "ads",
+  breakdownParams: readonly BreakdownQueryParam[] = [],
+) {
+  if (!/^\d+$/.test(account)) throw new Error("Valid account required");
+  const url = new URL(
+    `https://adsmanager.facebook.com/adsmanager/manage/${level}`,
+  );
+  url.searchParams.set("act", account);
+  for (const [key, value] of breakdownParams) {
+    if (
+      !/^[a-z0-9_]{1,64}_breakdown$/i.test(key) ||
+      !/^[a-z0-9_,.-]{1,100}$/i.test(value)
+    )
+      throw new Error("Invalid reporting breakdown parameter");
+    url.searchParams.set(key, value);
+  }
+  return url;
+}
 export function suiteUrl(raw: string, account: string, requireAccount = false) {
   const url = new URL(raw);
   if (

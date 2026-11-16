@@ -52,9 +52,9 @@ try {
  window.available=${JSON.stringify(fields)};window.selected=new Set();window.trustedEvents=0;window.untrustedEvents=0;
  function render(query=''){
  const list=document.querySelector('#choices');list.replaceChildren();
- for(const field of window.available.filter(f=>query?f.labels[0].toLowerCase().includes(query.toLowerCase()):f.key!=='link_clicks')){
+ for(const field of window.available.filter(f=>query?f.labels[0].toLowerCase().includes(query.toLowerCase()):f.key!==(window.hiddenKey??'link_clicks'))){
  const li=document.createElement('li'),input=document.createElement('input');input.type='checkbox';input.checked=window.selected.has(field.key);
- input.dataset.key=field.key;input.onchange=e=>{if(!e.isTrusted){input.checked=window.selected.has(field.key);window.untrustedEvents++;return;}window.trustedEvents++;if(input.checked)window.selected.add(field.key);else window.selected.delete(field.key);if(window.revokeOnChange&&field.key==='link_clicks')window.selected.delete('ad_id');};
+ input.dataset.key=field.key;input.onchange=e=>{if(!e.isTrusted){input.checked=window.selected.has(field.key);window.untrustedEvents++;return;}window.trustedEvents++;if(input.checked)window.selected.add(field.key);else window.selected.delete(field.key);if(window.revokeOnChange&&field.key==='ad_id')window.selected.delete('ad_id');};
  li.append(input,document.createTextNode(field.labels[0]));list.append(li);
  }}
  document.querySelector('#search').oninput=e=>{if(!e.isTrusted){window.untrustedEvents++;e.target.value='';return;}window.trustedEvents++;render(e.target.value)};render();
@@ -106,7 +106,8 @@ try {
   expect(result.applied).toBe(true);
   expect(result.missing_required).toEqual([]);
   expect(result.selected).toContain("spend");
-  expect(result.selected).toContain("link_clicks");
+  expect(result.selected).not.toContain("link_clicks");
+  expect(result.missing_goal_metrics).toContain("link_clicks");
   expect(await meta.evaluate(() => window.trustedEvents)).toBeGreaterThan(0);
   expect(await meta.evaluate(() => !!window.applied)).toBe(true);
   expect(await meta.evaluate(() => !!window.published)).toBe(false);
@@ -131,6 +132,7 @@ try {
   await meta.goto("https://adsmanager.facebook.com/adsmanager/manage/ads?act=123456789");
   await meta.evaluate(() => {
     window.available = window.available.filter(f => f.key !== 'account_id');
+    window.hiddenKey = 'ad_id';
     render();
     const search = document.querySelector('#search');
     // Meta's search aria name may remain English inside a Thai dialog.
@@ -149,15 +151,17 @@ try {
   });
   const delayed = await worker.evaluate((b) => TrustedReportFixture.prepareReportWithInput(b, "messages"), binding);
   expect(delayed.ok, JSON.stringify(delayed)).toBe(true);
-  expect(delayed.selected).toContain('link_clicks');
+  expect(delayed.selected).toContain('ad_id');
   expect(delayed.missing).toContain('account_id');
   expect(delayed.missing_required).toEqual([]);
   expect(delayed.applied).toBe(true);
-  expect(await meta.evaluate(() => window.queries[0])).toBe('การคลิกลิงก์');
+  expect(await meta.evaluate(() => window.queries[0])).toBe('ID โฆษณา');
   // A distinct debounce shape: input commits immediately, results clear, and
   // the actual matching choices arrive later without an aria-busy marker.
   await meta.goto('https://adsmanager.facebook.com/adsmanager/manage/ads?act=123456789');
   await meta.evaluate(() => {
+    window.hiddenKey = 'ad_id';
+    render();
     document.querySelector('#search').oninput = e => {
       if (!e.isTrusted) return;
       const query = e.target.value;
@@ -167,7 +171,7 @@ try {
   });
   const debounced = await worker.evaluate((b) => TrustedReportFixture.prepareReportWithInput(b, 'messages'), binding);
   expect(debounced.ok, JSON.stringify(debounced)).toBe(true);
-  expect(debounced.selected).toContain('link_clicks');
+  expect(debounced.selected).toContain('ad_id');
   expect(debounced.applied).toBe(true);
   await meta.goto('https://adsmanager.facebook.com/adsmanager/manage/ads?act=999');
   const wrongAccountUrl = await worker.evaluate((b) => TrustedReportFixture.prepareReportWithInput(b, 'messages'), binding);

@@ -1,5 +1,258 @@
 # Validation record — 2026-11-15
 
+## 0.6.22 read-only agent and report diagnostics
+
+Implemented `scripts/ads-agent.ts` and `npm run ads:agent` as a bounded
+orchestrator over the existing typed command queue. It refuses stale heartbeat,
+Extension versions below 0.6.22, disabled bridges, missing bound accounts and an
+already-running collection. It never enables the local report-input lease,
+approves an action or bypasses a popup. Candidate report diagnostics now include
+column labels and helper text within the existing bounded trace, and search uses
+explicit Thai/partial aliases while exact labels still decide selection.
+
+Observed checks:
+
+- `npm run typecheck`
+- `npm test`: 64/64 unit tests
+- `npm run test:report-probe`
+- `npm run test:report-columns`
+- `npm run test:report-input`
+- `npm run test:browser`
+- `npm run build`: Extension/API 0.6.22
+
+The agent version guard was exercised against the still-connected 0.6.5 device
+and stopped before navigation or Meta input with:
+`Extension 0.6.5 is older than required 0.6.6; reload dist/extension`.
+This is guard evidence, not live 0.6.22 acceptance. The next run must use a
+freshly reloaded device and report the resulting command/job IDs before any claim
+that report setup, complete Ads paging, stable IDs or ranking works live.
+
+### Live 0.6.6 report probe
+
+After user reload/reconnection, device state reported Extension 0.6.6 and
+`report_input=true`. `npm run ads:agent` verified the device and reached
+`report.prepare` command `819848d3-3209-4fc4-9007-c0e72791967d`, but the command
+ended safely with `applied=false`; no Save, publish, budget or ad-status action
+occurred.
+
+Bounded diagnostics identified distinct causes:
+
+- Spend appeared as a checked, visible, hit-tested option named
+  `จำนวนเงินที่ใช้จ่ายไป`, but later search/recheck churn lost it.
+- Link clicks appeared as `การคลิกลิงก์` but was clipped outside the visible
+  option pane.
+- No exact single-column option for Messaging conversations was exposed by the
+  Thai dialog for this Ads view.
+
+The report contract now marks goal-specific metrics as non-blocking after a
+trustworthy capture view is established. Generic Results and Cost per result are
+blocking because they support objective-aware cost analysis without relabelling
+generic Results as a conversion. The final verifier only revisits blocking fields,
+reducing search-state churn while retaining reversion checks.
+
+Post-correction fixtures pass: `test:report-columns`, `test:report-input`, all 64
+unit tests and strict typecheck. This is not yet successful live Save or complete
+Ads coverage; the user must reload the rebuilt 0.6.22 artifact before the next real
+run.
+
+### Live 0.6.9 report setup and collection
+
+After loading 0.6.9 and enabling the local report lease, `ads:agent` completed
+report setup with `applied=true`. Selected fields were Spend, Results, Cost per
+result, Campaign/Ad Set/Ad IDs, Impressions and Attribution. Link clicks and
+Messaging conversations remained explicit `missing_goal_metrics`; no value was
+invented.
+
+Collection job `e50e2ba5-651d-418e-97b7-1ab88f7fad56` produced 12 snapshots and
+all 12 were persisted in PostgreSQL. Vertical paging moved successfully across
+the bounded run. However every snapshot still contained only the visible name
+and delivery columns, so analysis correctly remained partial with zero verified
+IDs and no Spend/Impressions/Results. This isolates the next failure to
+horizontal column access rather than report setup, persistence or the analysis
+endpoint.
+
+0.6.10 adds a guarded native horizontal wheel fallback using the same local
+report lease, active tab/account/job checks and local target planning. Success
+requires a changed header projection plus horizontal offset; rows moving without
+verified column movement are rejected. The MV3 fixture verifies a frozen row
+anchor, horizontal wheel input, shared header/body movement and debugger detach.
+Fresh live0.6.10 acceptance remains pending reload and a new bounded collection.
+
+### Live 0.6.10 horizontal collection
+
+After reload and a fresh report lease, `ads:agent` again applied the reporting
+view and completed job `4990f762-66ae-4684-8e42-6698867160ce` with 10 snapshots,
+all persisted. Native horizontal paging produced distinct column slices for
+Cost per result/Impressions, Spend, Campaign ID, Ad ID/Attribution and CPC. One
+slice verified eight stable Ad IDs and another contained Spend plus other
+metrics, proving horizontal access works.
+
+The run still remained partial: IDs and metrics were captured in different
+horizontal slices, and the slice containing IDs lacked Spend/Impressions/Results.
+The analyzer correctly refused to join by row position or name. Only eight IDs
+were verified versus the footer count of 40. 0.6.11 therefore maximizes the
+reporting window before reading to increase the chance that stable IDs and
+metrics share one slice, while preserving the no-geometric-join rule.
+
+### Live 0.6.11 widened report slices
+
+Job `528c90c8-2f8b-4b0a-ac37-454f5598d69e` verified Extension 0.6.11, applied
+the report view and persisted six snapshots. Maximized-window slices placed
+Spend, Campaign ID, Ad Set ID, Ad ID and Attribution together; eight Ads had
+verified stable IDs and reported Spend. Another slice contained Results,
+Cost per result and Impressions without IDs.
+
+Only one vertical row set was collected because the final unchanged horizontal
+slice set the local `same` flag and the old control flow skipped vertical
+paging. The run therefore remained partial at 8/40 and could not merge ID and
+result slices without violating the no-position/no-name identity rule.
+
+0.6.12 removes that coupling: completing horizontal scanning now always
+advances the bounded vertical cycle. It also temporarily applies a guarded 0.7
+zoom while reading and restores the user's original zoom on completion, pause or
+error. The browser integration still passes; horizontal and vertical movement
+remain independently verified. Fresh live0.6.12 acceptance is pending.
+
+### Live 0.6.12 vertical cycle and widened coverage
+
+Job `401746be-e1bf-41d5-a52b-b3d30a2aee2a` verified Extension 0.6.12, applied the
+report view and persisted 15 snapshots. Vertical paging advanced through seven
+successful steps before the final no-move result. The main ID-bearing scope
+reached 18 stable Ads with reported Spend versus the footer count of 40, a
+material increase from 8.
+
+The ID-bearing slices still omitted Impressions and Results because those
+columns remained before the visible horizontal band. Another slice contained
+Results/Impressions but no stable ID, so no cross-slice join was attempted.
+0.6.13 reduces the temporary read zoom to 0.5 to try to fit the result metrics
+and identity columns into one slice, retaining the same restore and alignment
+guards. Fresh live0.6.13 acceptance is pending.
+
+### Live 0.6.13 full identity and metric coverage
+
+Job `7eb5a251-033b-4239-a7d5-36cac83412dc` verified Extension 0.6.13, applied
+the report view and persisted 25 snapshots. Read zoom 0.5 produced result and
+identity fields close enough to merge across horizontal slices. The analyzer now
+fills an unknown row attribution only from a unique attribution value seen for
+the same stable ID in another compatible slice.
+
+After restarting the API to load that correction, the main evidence scope
+reported:
+
+- 40 verified unique Ads against footer count 40
+- Spend from the reported column for all 40
+- no missing required columns
+- verified IDs and column mapping
+- visible result types for message conversations
+
+The remaining blockers before an official ranking were the operator-only
+context fields: timezone, no-breakdown confirmation and no-filter confirmation.
+A read-only analysis with the hypothetical context `Asia/Bangkok`,
+`confirm_no_breakdown=true` and `confirm_no_filters=true` produced a complete
+40-row scope, ten eligible message-result Ads, weighted cost per result and
+best/worst candidates. This is mechanism verification only; it is not recorded
+as an operator-confirmed production result until the user explicitly confirms
+those conditions.
+
+### 0.6.14 Breakdown reporting scope
+
+Added the typed `breakdown.prepare` command and
+`configureBreakdownWithInput`. The Extension may select only the exact allowlist
+`age`, `gender`, `platform` and `placement` through trusted debugger input under
+the existing report-input lease. It opens the identified Breakdown control,
+verifies option checked state after each click, clears allowlisted dimensions
+that are no longer requested, closes with Escape and detaches. A duplicate or
+missing option fails without claiming success. Unsupported active breakdown
+parameters, including `time_breakdown`, stop before input rather than guessing a
+clear operation.
+
+Analyzer scopes already carry row-level breakdown dimensions and never combine
+totals across different combinations. Cross-horizontal-slice attribution may be
+filled only from a unique value for the same stable ID; this lets IDs, Spend,
+Results and dimensions merge without name or row-position joins.
+
+Passing checks: strict typecheck, 66 unit tests, `test:breakdown` with trusted
+menu clicks and clear/switch behavior, `test:browser`, Extension/API build
+0.6.14. Live acceptance is pending a reloaded device with the unsupported `time`
+Breakdown removed and a request for `age,gender` or another supported
+combination.
+
+### Live 0.6.14 Breakdown matcher probe and 0.6.15 correction
+
+Backend initially rejected `breakdown.prepare` until the API process was
+restarted with the new shared schema; this was a process-load issue, not an
+Extension rejection. The next queued command reached the real Meta menu but
+failed safely with `breakdown_menu_not_found`; no dimension was selected.
+
+Read-only inspection after the trusted trigger click showed the real DOM shape:
+
+- options use `role=listitem` with a separate adjacent checkbox,
+- the placement label is `ตำแหน่งโฆษณา`,
+- the menu search input is `search columns`,
+- Gender was not visible until an in-menu search.
+
+0.6.15 pairs an exact listitem label with the nearest unique checkbox, accepts
+only the observed placement alias, and uses trusted `Input.insertText` in the
+menu search for hidden allowlisted dimensions. Clicking the trigger, selecting
+age, using search to reveal gender, switching to platform, clearing prior
+dimensions, Escape close and debugger detach all pass the MV3 fixture.
+
+Passing checks after correction: strict typecheck, 66 unit tests,
+`test:breakdown`, browser integration and Extension/API build 0.6.15. Live menu
+acceptance still requires the user to reload 0.6.15; the prior 0.6.14 failure is
+not treated as success.
+
+### Live 0.6.15 checkbox collision and 0.6.16 correction
+
+Backend loaded the new Breakdown contract after restart. Command
+`9937825b-91a8-4176-b27c-0daaf8884e6a` reached the live menu but returned
+`breakdown_selection_incomplete`; it did not Save or mutate ad delivery.
+The resulting URL contained `demographics_breakdown=age` but also
+`selected_ad_ids=...`, proving the matcher clicked an Ads-row checkbox that was
+vertically aligned with a Breakdown listitem but outside its menu column.
+
+0.6.16 requires the nearest checkbox to be inside the horizontal bounds of the
+matched Breakdown listitem. The MV3 fixture now includes a same-Y checkbox far
+outside the menu and verifies it remains unchecked while age/gender are selected
+through the real listitem/checkbox/search shape. Typecheck, 66 unit tests,
+breakdown input, browser integration and Extension/API build pass. Fresh live
+acceptance is pending reload of 0.6.16.
+
+### Live 0.6.16 selected trigger label and 0.6.17 correction
+
+After reload, command `7153acfc-db53-42f1-b4aa-8c6950cad9a8` returned
+`breakdown_menu_not_found` without selecting a dimension. The live page already
+had age Breakdown active, and read-only inspection showed its button label was
+`ข้อมูลแยกย่อย: เลือกแล้ว 1 รายการ`, not the plain label used by the matcher.
+
+0.6.17 accepts only a Breakdown-label prefix plus an optional selection-count
+suffix. The MV3 fixture now starts with the same selected-count button text and
+still opens, searches, selects and clears dimensions without changing an
+outside checkbox. Typecheck, 66 unit tests, Breakdown integration, browser
+integration and Extension/API build pass. Live acceptance requires reload of
+0.6.17 and clearing the accidentally selected Ads-row checkbox from the prior
+0.6.15 run.
+
+### Live 0.6.17 exclusive demographics and 0.6.18 correction
+
+Command `b5bde5c3-a127-420e-9c96-ee571c0b8163` reached the menu and selected
+Gender, but the requested Age+Gender combination was impossible: the URL moved
+from `demographics_breakdown=age` to `demographics_breakdown=gender`. A separate
+Age request similarly updated the URL to `demographics_breakdown=age`, while the
+post-rerender checkbox did not expose a checked state.
+
+This proves Age and Gender are alternative values in one demographics breakdown,
+not additive options. 0.6.18 therefore:
+
+- rejects Age+Gender in the shared contract and agent parser,
+- accepts the URL parameter for the matching stable dimension as verification
+  when the checkbox is rerendered,
+- treats an active URL value as selected without clicking it off,
+- supports switching Age -> Gender or Gender -> Age with explicit clear proof.
+
+Checks pass: typecheck, 66 unit tests, Breakdown search/switch fixture, browser
+integration and Extension/API build 0.6.18. Live acceptance is pending reload.
+
 ## Passing checks
 
 - `npm run check`: strict TypeScript, 12 unit tests, extension and API bundles.
@@ -229,3 +482,27 @@ Another exact pure-function regression demonstrated a scope bypass: three DOM ad
 Existing review workflow now accepts explicit true-only no-breakdown/no-filter confirmations under one shared schema. Defaults are unchecked and reset by capture/account; observed contradictory scope and missing IDs/date/currency/mapping cannot be overridden. API fixture verifies rejection before confirmation, true-only validation, promotion/audit only after explicit confirmation, and no identity creation. Browser fixture verifies empty default POST, reset on another capture, and flags sent only after user selection. Raw evidence remains unchanged; normalized records carry DOM/operator provenance.
 
 Reader also preserves parent IDs from explicit visible columns and refuses conflicting own/parent ID columns or links. This closes the no-href child promotion path without joining names or positions as identity. Latest pure unit count62/62; current-source API tests, production Next build and browser review-flow tests pass. Final Extension0.6.5 artifact is built; fresh live acceptance still requires actual runtime0.6.5 and user-enabled local report-input lease. All raw customer evidence remains in ignored reports/.
+
+## Live 0.6.19–0.6.21 Breakdown Age
+
+`0.6.19` preserved `demographics_breakdown=age` through job navigation and ran a
+39-snapshot collection. Age values were visible as subrows but the original
+reader captured only parent Ads rows, so breakdown remained unverified.
+
+Read-only DOM diagnostics in `0.6.20` showed age text subrows had no ID link or
+switch inside their own ancestors; they sit below a parent row carrying the
+stable Ad ID. `0.6.21` maps each visible age subrow by Y geometry to the nearest
+preceding stable-ID parent, copies only ID/status/result-type metadata from that
+parent, and reads the subrow's Spend/Impressions/Results from its own cells.
+
+Live job `27244eba-436b-47ec-a9e7-62a160274b21` persisted 36 snapshots. The
+analyzer produced age scopes `18–24`, `25–34`, `35–44`, `45–54`, `55–64`, `65+`
+with 25–34 verified Ads per scope, Spend from the reported column, and no
+breakdown blocker after the analyzer fix. It did not yet produce rankings because
+most subrow Results cells lacked a result type.
+
+0.6.22 adds parent status/result-type metadata copy and busy-marker waiting for
+the Breakdown menu. Its reader fixture covers age subrows, stable parent ID,
+metric cells, status and result type. `npm run check` (67 tests), reader,
+Breakdown, browser, report-probe and report-columns fixtures pass. Live0.6.22
+acceptance remains pending reload; no ranking from age scopes is claimed yet.

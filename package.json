@@ -14,6 +14,7 @@
     "test:browser": "tsx --env-file=.env tests/browser.integration.ts",
     "format": "prettier --write \"apps/**/*.{ts,tsx,html,css,json}\" \"packages/**/*.ts\" \"scripts/**/*.ts\" \"tests/**/*.ts\" \"*.json\"",
     "bot": "tsx --env-file=.env scripts/bot.ts",
+    "ads:agent": "tsx --env-file=.env scripts/ads-agent.ts",
     "test:ui": "tsx --env-file=.env tests/ui.browser.integration.ts",
     "health": "tsx --env-file=.env scripts/health.ts",
     "dev:web": "npm run dev --workspace=@meta-collector/web",
@@ -27,6 +28,7 @@
     "test:analysis": "node --env-file=.env tests/analysis.api.integration.mjs",
     "test:capture-analysis-web": "node tests/capture-analysis.web.integration.mjs",
     "test:report-columns": "node tests/report-columns.browser.integration.mjs",
+    "test:breakdown": "node tests/breakdown-input.browser.integration.mjs",
     "test:report-probe": "node tests/report-probe.browser.integration.mjs",
     "test:report-input": "node tests/report-input.browser.integration.mjs",
     "test:report-scroll": "node tests/report-scroll.browser.integration.mjs"

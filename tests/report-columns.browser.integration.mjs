@@ -18,6 +18,8 @@ const fields = [
   "Ad ID",
   "Amount spent",
   "Impressions",
+  "Results",
+  "Cost per result",
   "Link clicks",
   "Attribution setting",
   "Purchases",
@@ -34,7 +36,7 @@ const html = (
 <button hidden id="custom" onclick="document.querySelector('#dialog').hidden=false">Customize columns</button>
 <div hidden id="dialog" role="dialog" aria-labelledby="title"><h2 id="title">Customize columns</h2>
 ${fields
-  .filter((f) => !missing || f !== "Purchases")
+  .filter((f) => !missing || f !== "Ad ID")
   .map(
     (f, i) =>
       `<label><input type="checkbox" id="field${i}" ${i === 0 ? "checked" : ""}>${f}</label>`,
@@ -105,7 +107,7 @@ try {
   expect(clippedRequired.missing_required).toContain("ad_id");
   expect(await page.evaluate(() => !!window.applied)).toBe(false);
   const missing = await prepare(html(true));
-  expect(missing.missing_required).toContain("purchases");
+  expect(missing.missing_required).toContain("ad_id");
   expect(missing.applied).toBe(false);
   expect(missing.ok).toBe(false);
   expect(await page.evaluate(() => !!window.applied)).toBe(false);

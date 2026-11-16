@@ -301,7 +301,9 @@ export async function prepareReportColumns(options: {
         if (!missing.includes(field.key)) missing.push(field.key);
       }
     }
-    if (!selected.length || fields.some((f) => f.required && !selected.includes(f.key)))
+    const blocking = (field: ReportField) =>
+      field.blocking ?? field.required;
+    if (!selected.length || fields.some((f) => blocking(f) && !selected.includes(f.key)))
       return {
         ok: false as const,
         error: "คอลัมน์จำเป็นยังเลือกไม่ครบหรือยืนยันสถานะไม่ได้ จึงไม่บันทึกมุมมองรายงาน",
@@ -309,7 +311,12 @@ export async function prepareReportColumns(options: {
         selected,
         missing,
         missing_required: fields
-          .filter((f) => f.required && missing.includes(f.key))
+          .filter((f) => blocking(f) && missing.includes(f.key))
+          .map((f) => f.key),
+        missing_goal_metrics: fields
+          .filter(
+            (f) => f.required && !blocking(f) && missing.includes(f.key),
+          )
           .map((f) => f.key),
         applied: false,
         diagnostics,
@@ -336,7 +343,12 @@ export async function prepareReportColumns(options: {
       selected,
       missing,
       missing_required: fields
-        .filter((f) => f.required && missing.includes(f.key))
+        .filter((f) => blocking(f) && missing.includes(f.key))
+        .map((f) => f.key),
+      missing_goal_metrics: fields
+        .filter(
+          (f) => f.required && !blocking(f) && missing.includes(f.key),
+        )
         .map((f) => f.key),
       applied,
       warning:
@@ -351,13 +363,27 @@ export async function prepareReportColumns(options: {
       selected: [] as string[],
       missing: [] as string[],
       missing_required: [] as string[],
+      missing_goal_metrics: [] as string[],
       applied: false,
       warning: "Column setup stopped; review the visible Meta dialog.",
     };
   }
 }
 
-export type ReportField = { key: string; labels: string[]; required: boolean };
+export type ReportField = {
+  key: string;
+  labels: string[];
+  /** Search-only aliases. Exact labels still decide which checkbox is selected. */
+  search_terms?: string[];
+  /** Context terms that identify a similarly named but unrelated option. */
+  exclude_terms?: string[];
+  /** Preferred surrounding context when Meta renders more than one exact label. */
+  prefer_terms?: string[];
+  required: boolean;
+  /** Required for a trustworthy reporting view before Save. Goal-only metrics
+   * may be reported missing without blocking a read-only capture. */
+  blocking?: boolean;
+};
 export function getReportFields(goal: "messages" | "sales" | "leads") {
   const fields: ReportField[] = [
     {
@@ -371,6 +397,7 @@ export function getReportFields(goal: "messages" | "sales" | "leads") {
       key: "campaign_name",
       labels: ["Campaign name", "ชื่อแคมเปญ"],
       required: true,
+      blocking: true,
     },
     {
       key: "ad_set_name",
@@ -383,39 +410,57 @@ export function getReportFields(goal: "messages" | "sales" | "leads") {
       key: "campaign_id",
       labels: ["Campaign ID", "ID แคมเปญ", "รหัสแคมเปญ"],
       required: true,
+      blocking: true,
     },
     {
       key: "ad_set_id",
       labels: ["Ad set ID", "ID ชุดโฆษณา", "รหัสชุดโฆษณา"],
       required: true,
+      blocking: true,
     },
     {
       key: "ad_id",
       labels: ["Ad ID", "ID โฆษณา", "รหัสโฆษณา"],
       required: true,
+      blocking: true,
     },
     {
       key: "spend",
       labels: ["Amount spent", "จำนวนเงินที่ใช้จ่ายไป", "จำนวนเงินที่ใช้ไป"],
+      search_terms: ["ใช้จ่าย", "Amount spent"],
+      exclude_terms: ["เป็นเปอร์เซ็นต์", "percentage"],
+      prefer_terms: ["ผลลัพธ์และการใช้จ่าย", "เงินใช้จ่าย"],
       required: true,
+      blocking: true,
     },
     {
       key: "impressions",
       labels: ["Impressions", "อิมเพรสชัน"],
       required: true,
+      blocking: true,
     },
     {
       key: "link_clicks",
       labels: ["Link clicks", "การคลิกลิงก์"],
+      search_terms: ["คลิกลิงก์", "Link clicks"],
       required: true,
+      blocking: false,
     },
     { key: "reach", labels: ["Reach", "การเข้าถึง"], required: false },
     { key: "frequency", labels: ["Frequency", "ความถี่"], required: false },
-    { key: "results", labels: ["Results", "ผลลัพธ์"], required: false },
+    {
+      key: "results",
+      labels: ["Results", "ผลลัพธ์"],
+      exclude_terms: ["ROAS", "ผลตอบแทนจากค่าใช้จ่ายในการโฆษณา"],
+      prefer_terms: ["ผลลัพธ์และการใช้จ่าย"],
+      required: true,
+      blocking: true,
+    },
     {
       key: "cost_per_result",
       labels: ["Cost per result", "ต้นทุนต่อผลลัพธ์"],
-      required: false,
+      required: true,
+      blocking: true,
     },
     {
       key: "link_ctr",
@@ -439,23 +484,32 @@ export function getReportFields(goal: "messages" | "sales" | "leads") {
       key: "attribution",
       labels: ["Attribution setting", "การตั้งค่าการระบุที่มา"],
       required: true,
+      blocking: true,
     },
   ];
   if (goal === "messages")
     fields.push({
       key: "messaging_conversations",
       labels: ["Messaging conversations started", "การส่งข้อความเพื่อเริ่มการสนทนา"],
+      search_terms: ["ส่งข้อความ", "Messaging conversations"],
       required: true,
+      blocking: false,
     });
   if (goal === "leads")
     fields.push({
       key: "leads",
       labels: ["Leads", "ลูกค้าเป้าหมาย"],
       required: true,
+      blocking: false,
     });
   if (goal === "sales")
     fields.push(
-      { key: "purchases", labels: ["Purchases", "การซื้อ"], required: true },
+      {
+        key: "purchases",
+        labels: ["Purchases", "การซื้อ"],
+        required: true,
+        blocking: false,
+      },
       {
         key: "purchase_value",
         labels: [
@@ -465,6 +519,7 @@ export function getReportFields(goal: "messages" | "sales" | "leads") {
           "มูลค่าคอนเวอร์ชั่นการซื้อ",
         ],
         required: true,
+        blocking: false,
       },
       {
         key: "landing_page_views",

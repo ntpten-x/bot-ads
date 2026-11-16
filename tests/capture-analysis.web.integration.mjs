@@ -83,7 +83,7 @@ try {
     page: "/adsmanager/manage/ads",
     level: "ads",
     captured_at: "2026-11-15T01:00:00Z",
-    reader_version: "0.6.5",
+    reader_version: "0.6.22",
     coverage: "visible_only",
     column_alignment: "aligned",
     reporting_context: { currency: "THB", timezone: "unverified" },

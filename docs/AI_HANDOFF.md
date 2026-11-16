@@ -1,6 +1,43 @@
 # AI handoff และรูปแบบการพัฒนาระบบ
 
-เอกสารส่งต่องาน ณ 16 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.5 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+งาน Ads automation/Breakdown รอบล่าสุดมีรายละเอียดส่งต่อที่
+[HANDOFF_ADS_AUTOMATION_2026-11-16.md](HANDOFF_ADS_AUTOMATION_2026-11-16.md)
+
+เอกสารส่งต่องาน ณ 16 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.22 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+
+0.6.6 เพิ่ม read-only orchestrator `npm run ads:agent` ที่ตรวจ device/version/account, navigate, เรียก report setup, เริ่มเก็บ Ads, รอ PostgreSQL capture และสรุปผลวิเคราะห์; เพิ่ม Thai/partial search aliases และ bounded candidate diagnostics. Live probe พบว่า spend ถูกเลือกแต่ final recheck ทำให้หลุด, link clicks ถูก clip และ messaging ไม่มีคอลัมน์เดี่ยวใน UI ไทย
+
+0.6.7 แยก blocking capture fields (ชื่อ, IDs, spend, impressions, results, cost per result, attribution) จาก goal metrics เสริม (link clicks, messaging, purchases/leads/value) เพื่อให้ report setup Save view ที่ใช้งานได้และรายงาน metric ที่ขาดใน `missing_goal_metrics` โดยไม่เดาค่า
+
+0.6.8 แยกผลลัพธ์ generic ออกจากตัวเลือก ROAS ที่ใช้ชื่อซ้ำ และจำ query ที่เลือกสำเร็จเพื่อใช้ใน final recheck
+
+0.6.9 เลือก Spend จาก context `ผลลัพธ์และการใช้จ่าย/เงินใช้จ่าย` และตัดตัวเลือก Spend percentage ที่ใช้ชื่อซ้ำ
+
+0.6.10 เพิ่ม native horizontal wheel fallback สำหรับ Meta grid ที่ DOM scrollLeft ใช้งานไม่ได้ ตรวจ header projection และ horizontal offset ว่าเปลี่ยนจริงก่อนถือว่าอ่านคอลัมน์ใหม่ได้
+
+0.6.11 maximize หน้าต่าง Meta ก่อน start/resume เพื่อเพิ่มโอกาสที่ stable IDs และ metrics อยู่ใน horizontal slice เดียวกัน; ยังไม่อนุญาตให้ join ข้าม slice ด้วยชื่อหรือตำแหน่ง
+
+0.6.12 แก้ vertical cycle ที่เคยหยุดเมื่อ horizontal slice สุดท้ายไม่เปลี่ยนภาพ และใช้ zoom-out ชั่วคราวระหว่างอ่านเพื่อเพิ่มโอกาสที่ Results/Impressions/Spend/IDs อยู่ในภาพเดียว; คืน zoom เดิมเมื่อจบ/pause/error
+
+0.6.13 ลด temporary read zoom จาก 0.7 เป็น 0.5 หลัง live0.6.12 พบว่า ID/Spend อยู่ด้วยกันแต่ Results/Impressions ยังอยู่นอก slice
+
+0.6.14 เพิ่ม `breakdown.prepare` สำหรับมิติ age/gender/platform/placement ผ่าน trusted UI input ภายใต้ report lease; ตัวเลือก exact และ clearing ถูกจำกัด, ไม่รับ selector จาก Backend, และไม่ถือว่า breakdown เท่ากับ filter
+
+0.6.15 ปรับ Breakdown matcher จาก DOM จริง: listitem กับ checkbox แยกกัน, alias `ตำแหน่งโฆษณา`, และ trusted search ภายในเมนูสำหรับมิติที่ถูกซ่อน เช่น เพศ
+
+0.6.16 จำกัดการจับคู่ checkbox ให้อยู่ในคอลัมน์เดียวกับ listitem ของ Breakdown หลัง live0.6.15 คลิก checkbox แถว Ads ที่อยู่แกน Y เดียวกัน
+
+0.6.17 รับ Breakdown trigger label ที่มี suffix จำนวนรายการ เช่น `ข้อมูลแยกย่อย: เลือกแล้ว 1 รายการ`
+
+0.6.18 ใช้ URL parameter เป็นหลักฐานยืนยัน Demographic Breakdown หลัง checkbox rerender และบังคับว่า Age/Gender ซึ่งอยู่ใน `demographics_breakdown` เดียวกันต้องเลือกทีละค่า
+
+0.6.19 พา validated `*_breakdown` query จากหน้าปัจจุบันเข้า job URL และทุกการเปลี่ยนหน้า/vertical cycle; ก่อนหน้านี้ start ตัด Breakdown ออกทำให้ reader เห็นเฉพาะ parent rows
+
+0.6.20 เพิ่ม bounded read-only breakdown row diagnostics เพื่อตรวจว่า Meta ซ้อนค่ามิติใน subrow ใดและมี ID/cells/switch อยู่ใน ancestor ใด ก่อนทำ promotion mapping จากโครงสร้างจริง
+
+0.6.21 map Age/Gender breakdown subrows ตามแกน Y ใต้ stable-ID parent row, อ่าน metric cells จากแถว subrow ตาม header และสร้าง grain แยกมิติโดยไม่ใช้ชื่อหรือตำแหน่งเป็น identity ข้ามหน้า
+
+0.6.22 copy status/result type จาก stable-ID parent ไปยัง breakdown subrow โดยไม่คัดลอกยอดรวม, ยืนยัน row-level breakdown แม้ page base เป็น null, และรอ busy marker ของ Meta ก่อนเปิด Breakdown menu
 
 0.6.5 แก้ pane selection ของการเลื่อน, horizontal header/body pairing, vertical row_alignment, parent IDs จากคอลัมน์, visible-only report controls/busy markers และปิดทางยก DOM ที่ไม่ยืนยัน scope ไปเป็น normalized data; เพิ่มการยืนยันว่าไม่มี Breakdown/ตัวกรองโดยผู้ใช้ในฟอร์มตรวจข้อมูลเดิม (default ไม่เลือก) ดู ANALYSIS.md และ VALIDATION.md ก่อนอ้างความพร้อม ต้องยืนยัน runtime/snapshot0.6.5 และผลจริงใหม่ เพราะผล live0.6.4 ด้านล่างยังเป็น failed acceptance ไม่ใช่หลักฐานว่ารุ่นใหม่ผ่าน
 
@@ -8,7 +45,7 @@ Live 0.6.3 หลังผู้ใช้ Reload: inspect ผ่าน แต่
 
 Live 0.6.4 ล่าสุด: ยืนยันรุ่นและ report lease แล้ว ตัวเลือกจุดเมาส์ผ่าน guard แต่เลื่อนไม่เผยแถวใหม่ (`visible_rows_unchanged`) ทั้ง 3 ระดับ; Ads ยัง7แถวต่อภาพ/footer40 งานจบ needs_review ตั้งคอลัมน์ซ้ำยัง applied=false ขาด spend/link_clicks/messaging_conversations จึงยังไม่พร้อมประเมินรายแอดจาก DOM จริง การผ่าน fixture ไม่ได้ปิดสองปัญหานี้ ห้ามอ้าง live paging/setup สำเร็จหรือข้าม blockers; ใช้ validated CSV เมื่อต้องการข้อมูลวิเคราะห์ที่ตรวจเงื่อนไขได้
 
-Reliability รอบล่าสุด: อ่าน [ANALYSIS.md ส่วน 0.6.3](ANALYSIS.md#reliability-และการประเมินรายแอด-063) ก่อนแก้ตัววิเคราะห์/reader และอ่าน [ผลประเมินก่อนแก้](ASSESSMENT_2026-11-16.md) เพื่อทราบ regression ที่ต้องรักษา DOM ที่ไม่มี ID หรือบริบท Breakdown/ตัวกรองยังไม่ยืนยันต้องไม่สร้างยอดรวม อันดับ หรือ complete; เทียบชื่อ/ตำแหน่งเพื่อ join ไม่ได้ รายละเอียดเก่าในส่วน 7 เป็นประวัติ ต้องตรวจรุ่น Extension ที่เชื่อมจริงก่อนอ้าง live acceptance
+Reliability รอบล่าสุด: อ่าน [ANALYSIS.md ส่วน 0.6.3](ANALYSIS.md#reliability-และการประเมินรายแอด-063) ก่อนแก้ตัววิเคราะห์/reader และอ่าน [ผลประเมินก่อนแก้](ASSESSMENT_2026-11-16.md) เพื่อทราบ regression ที่ต้องรักษา DOM ที่ไม่มี ID หรือบริบท Breakdown/ตัวกรองยังไม่ยืนยันต้องไม่สร้างยอดรวม อันดับ หรือ complete; เทียบชื่อ/ตำแหน่งเพื่อ join ไม่ได้ รายละเอียดเก่าในส่วน 7 เป็นประวัติ ต้องตรวจรุ่น Extension ที่เชื่อมจริงก่อนอ้าง live acceptance. Workflow บอท read-only และข้อจำกัดอยู่ที่ [ADS_AUTOMATION.md](ADS_AUTOMATION.md)
 
 ## 1. เป้าหมายและขอบเขต
 
@@ -60,6 +97,7 @@ CSV → validate → quality report → transactional import / UPSERT → export
 | packages/core/src/dom-capture.ts | Zod contract ของ snapshot, แปลงวันที่จากปุ่มช่วงวันที่, กฎ promote แถว DOM capture (pure, มี unit test) |
 | db | SQL migrations; insights_daily เป็น view ของ observation รายวันตามเงื่อนไข |
 | scripts | Build, migration, health และ CLI bot |
+| scripts/ads-agent.ts | Orchestrator read-only: ตรวจ device, navigate, ตั้งคอลัมน์, collect Ads, รอ DB capture และสรุป analysis |
 | tests | Unit, API integration และ browser fixtures |
 | reports, dist | Local artifacts ที่ไม่ใช่ source ถาวรและไม่ควร commit |
 

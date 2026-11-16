@@ -8,6 +8,11 @@ export function readVisibleTable() {
     !url.pathname.startsWith("/adsmanager/")
   )
     throw new Error("Open an Ads Manager reporting page");
+  const norm = (value: string) =>
+    value
+      .replace(/[\u200b-\u200d\ufeff]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
   const visible = (el: Element) => {
     const r = el.getBoundingClientRect();
     const s = getComputedStyle(el);
@@ -441,6 +446,8 @@ export function readVisibleTable() {
         "Header and body scroll offsets differ; column mapping is rejected for this capture.",
       );
   }
+  const geometryParents: { center: number; row: Observation }[] = [];
+  let geometryScope: Element | null = null;
   if (!row_observations.length && unstructured && observedHeaders.length >= 2) {
     let scope: Element | null =
       document.querySelector('[role="columnheader"]')?.parentElement ?? null;
@@ -474,6 +481,7 @@ export function readVisibleTable() {
     if (anchorSelector !== anchorKinds[0])
       warnings.push("Rows anchored by selection checkboxes because no on/off switches were visible.");
     if (scope && scope !== document.body) {
+      geometryScope = scope;
       const anchors = markersIn(scope, anchorSelector)
         .map((el) => ({ el, rect: el.getBoundingClientRect() }))
         .sort((a, b) => a.rect.top - b.rect.top)
@@ -682,7 +690,7 @@ export function readVisibleTable() {
         if(row_alignment!=="aligned")rowWarnings.push(row_alignment==="mismatch"
           ?"Identity and metric vertical scroll offsets differ; row association is unverified."
           :"Independent vertical transforms prevent verification of identity/metric row association.");
-        row_observations.push({
+        const observation: Observation = {
           ...identity,
           parent_ids: resolveParents(found,rowCells,rowWarnings,column_mapping==="verified_geometry"),
           name: nameHeader
@@ -692,6 +700,11 @@ export function readVisibleTable() {
           column_mapping,
           cells: rowCells,
           warnings: rowWarnings,
+        };
+        row_observations.push(observation);
+        geometryParents.push({
+          center: (band.top + band.bottom) / 2,
+          row: observation,
         });
       });
     }
@@ -759,9 +772,289 @@ export function readVisibleTable() {
   evidence.breakdown = "unverified";
   evidence.filters = "unverified";
   warnings.push("Breakdown and filter scope are unverified; visible rows cannot certify whole-account coverage.");
+  const activeBreakdowns = [...url.searchParams]
+    .filter(([key, value]) => /_breakdown$/i.test(key) && !!value)
+    .map(([key, value]) => ({ key, value }));
+  const breakdownValue =
+    /^(?:18[–-]24|25[–-]34|35[–-]44|45[–-]54|55[–-]64|65\+|male|female|ชาย|หญิง|ไม่ระบุ)$/i;
+  const breakdown_diagnostics =
+    activeBreakdowns.length === 0
+      ? null
+      : (() => {
+          const tokens: {
+            value: string;
+            rect: { left: number; top: number; width: number; height: number };
+            visible: boolean;
+            ancestors: {
+              tag: string;
+              role: string | null;
+              width: number;
+              height: number;
+              id_links: number;
+              switches: number;
+              cells: number;
+            }[];
+            identity_ancestor: number | null;
+          }[] = [];
+          const walker = document.createTreeWalker(
+            document.body,
+            NodeFilter.SHOW_TEXT,
+          );
+          let visited = 0;
+          while (walker.nextNode() && visited++ < 30000 && tokens.length < 20) {
+            const value = norm(walker.currentNode.textContent ?? "");
+            if (!breakdownValue.test(value)) continue;
+            const parent = walker.currentNode.parentElement;
+            if (!parent) continue;
+            const range = document.createRange();
+            range.selectNodeContents(walker.currentNode);
+            const rect = range.getBoundingClientRect();
+            if (!rect.width || !rect.height) continue;
+            const ancestors: {
+              tag: string;
+              role: string | null;
+              width: number;
+              height: number;
+              id_links: number;
+              switches: number;
+              cells: number;
+            }[] = [];
+            let identity_ancestor: number | null = null;
+            let current: Element | null = parent;
+            for (let depth = 0; current && depth < 10; depth++) {
+              const r = current.getBoundingClientRect();
+              const idLinks = [
+                ...current.querySelectorAll<HTMLAnchorElement>("a[href]"),
+              ].filter((anchor) => {
+                try {
+                  const link = new URL(anchor.href, location.href);
+                  const id = link.searchParams.get(ownParam);
+                  return (
+                    ["adsmanager.facebook.com", "business.facebook.com"].includes(
+                      link.hostname,
+                    ) &&
+                    !!id &&
+                    /^\d+$/.test(id)
+                  );
+                } catch {
+                  return false;
+                }
+              }).length;
+              if (idLinks && identity_ancestor === null)
+                identity_ancestor = depth;
+              ancestors.push({
+                tag: current.tagName.toLowerCase(),
+                role: current.getAttribute("role"),
+                width: Math.round(r.width),
+                height: Math.round(r.height),
+                id_links: idLinks,
+                switches: current.querySelectorAll(
+                  '[role="switch"],input[type="checkbox"],[role="checkbox"]',
+                ).length,
+                cells: current.querySelectorAll(
+                  '[role="gridcell"],[role="cell"],[role="rowheader"],td',
+                ).length,
+              });
+              current = current.parentElement;
+            }
+            tokens.push({
+              value,
+              rect: {
+                left: Math.round(rect.left),
+                top: Math.round(rect.top),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+              },
+              visible:
+                rect.width > 0 &&
+                rect.height > 0 &&
+                rect.bottom > 0 &&
+                rect.top < innerHeight &&
+                rect.right > 0 &&
+                rect.left < innerWidth,
+              ancestors,
+              identity_ancestor,
+            });
+          }
+          return { active: activeBreakdowns, tokens };
+        })();
+  const demographicValue = activeBreakdowns.find(
+    ({ key }) => key === "demographics_breakdown",
+  )?.value;
+  const breakdownDimension =
+    demographicValue === "age"
+      ? {
+          header: "อายุ",
+          pattern:
+            /^(?:18[–-]24|25[–-]34|35[–-]44|45[–-]54|55[–-]64|65\+)$/,
+        }
+      : demographicValue === "gender"
+        ? {
+            header: "เพศ",
+            pattern: /^(?:ชาย|หญิง|ไม่ระบุ|male|female|unknown)$/i,
+          }
+        : null;
+  if (
+    breakdownDimension &&
+    geometryScope &&
+    geometryParents.length &&
+    observedHeaders.length >= 2
+  ) {
+    const parents = [...geometryParents].sort((a, b) => a.center - b.center);
+    const rowsByAge: Observation[] = [];
+    const scope = geometryScope;
+    const parentWalker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+    while (parentWalker.nextNode()) {
+      const node = parentWalker.currentNode;
+      const value = norm(node.textContent ?? "");
+      if (!breakdownDimension.pattern.test(value)) continue;
+      const parent = node.parentElement;
+      if (!parent || !visible(parent)) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const tokenRect = range.getBoundingClientRect();
+      if (!tokenRect.width || !tokenRect.height) continue;
+      const center = tokenRect.top + tokenRect.height / 2;
+      const identityParent = [...parents]
+        .reverse()
+        .find((candidate) => candidate.center < center)?.row;
+      if (
+        !identityParent?.identity ||
+        !["row_link_href", "id_column"].includes(
+          identityParent.identity_source ?? "",
+        )
+      )
+        continue;
+      const top = tokenRect.top - 9;
+      const bottom = tokenRect.bottom + 9;
+      const values = new Map<string, string[]>();
+      const metricWalker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+      while (metricWalker.nextNode()) {
+        const metricNode = metricWalker.currentNode;
+        if (metricNode === node) continue;
+        const metricParent = metricNode.parentElement;
+        const textValue = metricNode.textContent?.trim();
+        if (
+          !metricParent ||
+          !textValue ||
+          !visible(metricParent) ||
+          metricParent.closest(
+            'script,style,noscript,input,textarea,[contenteditable="true"],[role="columnheader"]',
+          )
+        )
+          continue;
+        const metricRange = document.createRange();
+        metricRange.selectNodeContents(metricNode);
+        const rect = metricRange.getBoundingClientRect();
+        const y = rect.top + rect.height / 2;
+        if (
+          !rect.width ||
+          !rect.height ||
+          y < top ||
+          y > bottom ||
+          rect.left < 0 ||
+          rect.right > innerWidth
+        )
+          continue;
+        const matchedHeaders = observedHeaders.filter(
+          (header) =>
+            rect.left >= header.rect.left - 2 &&
+            rect.right <= header.rect.right + 2,
+        );
+        if (matchedHeaders.length !== 1) continue;
+        const header = matchedHeaders[0].label;
+        const parts = values.get(header) ?? [];
+        parts.push(textValue);
+        values.set(header, parts);
+      }
+      const idCells = identityParent.cells.filter((cell) =>
+        /^(?:id แคมเปญ|id ชุดโฆษณา|id โฆษณา|campaign id|ad set id|ad id)$/i.test(
+          cell.header.trim(),
+        ),
+      );
+      const statusCell = identityParent.cells.find((cell) =>
+        /^(?:status|การแสดงโฆษณา)$/i.test(cell.header.trim()),
+      );
+      const resultCell = identityParent.cells.find((cell) =>
+        /^(?:results|ผลลัพธ์)$/i.test(cell.header.trim()),
+      );
+      const resultTypeCell = identityParent.cells.find((cell) =>
+        /^(?:result type|ประเภทผลลัพธ์|result indicator|ตัวบ่งชี้ผลลัพธ์)$/i.test(
+          cell.header.trim(),
+        ),
+      );
+      const resultType =
+        (resultTypeCell?.text.trim() ||
+          (() => {
+            if (!resultCell) return null;
+            const lines = resultCell.text.split("\n");
+            const separate = lines
+              .slice(1)
+              .find(
+                (line) =>
+                  !!norm(line) &&
+                  !/^[\d.,%฿$€£—–-]+$/.test(norm(line)),
+              );
+            if (separate) return separate;
+            const inline = norm(lines[0] ?? "").replace(
+              /^[\d.,%฿$€£—–-]+\s*/,
+              "",
+            );
+            return inline || null;
+          })()) ??
+        null;
+      const cells = [
+        { header: breakdownDimension.header, text: value },
+        ...idCells,
+        ...(statusCell ? [statusCell] : []),
+        ...(resultType
+          ? [{ header: "result_type", text: resultType }]
+          : []),
+        ...[...values]
+          .filter(
+            ([header]) =>
+              !idCells.some((cell) => cell.header === header) &&
+              header !== statusCell?.header &&
+              !nameHeaderPattern.test(header),
+          )
+          .map(([header, parts]) => ({
+            header,
+            text: parts.join("\n"),
+          })),
+      ];
+      if (cells.length < 3) continue;
+      const verified =
+        identityParent.column_mapping === "verified_geometry" &&
+        column_alignment === "aligned" &&
+        row_alignment === "aligned";
+      const warnings = [
+        `Breakdown ${breakdownDimension.header} row associated with the nearest preceding stable-ID parent row.`,
+        ...(!verified
+          ? ["Breakdown subrow column mapping requires review."]
+          : []),
+      ];
+      rowsByAge.push({
+        identity: identityParent.identity,
+        identity_source: identityParent.identity_source,
+        parent_ids: { ...identityParent.parent_ids },
+        name: identityParent.name,
+        method: "geometry",
+        column_mapping: verified ? "verified_geometry" : "unverified",
+        cells,
+        warnings,
+      });
+    }
+    if (rowsByAge.length) {
+      row_observations.length = 0;
+      row_observations.push(...rowsByAge);
+      warnings.push(
+        `Breakdown ${breakdownDimension.header} rows were mapped only to nearest stable-ID parent rows; no name/position identity join was used across pages.`,
+      );
+    }
+  }
   return {
     account_id: url.searchParams.get("act"),
-    reader_version: "0.6.5",
+    reader_version: "0.6.22",
     page: url.pathname,
     level,
     captured_at: new Date().toISOString(),
@@ -775,6 +1068,7 @@ export function readVisibleTable() {
     row_alignment,
     row_alignment_diagnostics,
     header_mode: headerMode,
+    breakdown_diagnostics,
     reporting_context: {
       date_range_label:
         buttons.find((s) =>
@@ -1166,7 +1460,17 @@ export function probeReportingScroll(account: string) {
   // A row can have both a checkbox and switch: take one anchor per row band.
   const rows = markers.filter((el, i) => i === 0 ||
     Math.abs(el.getBoundingClientRect().top - markers[i - 1].getBoundingClientRect().top) > 8);
-  if (!rows.length) return unavailable("no_visible_reporting_rows");
+  if (!rows.length)
+    return {
+      ...unavailable("no_visible_reporting_rows"),
+      marker_diagnostics: {
+        headers: headers.length,
+        header_bottom: bottom,
+        switches: [...document.querySelectorAll('[role="switch"]')].filter(visible).length,
+        checkboxes: [...document.querySelectorAll('input[type="checkbox"],[role="checkbox"]')].filter(visible).length,
+        row_elements: [...document.querySelectorAll('[role="row"],tbody tr')].filter(visible).length,
+      },
+    };
   let scope: Element | null = rows[0].parentElement;
   while (scope && !(headers.every((el) => scope!.contains(el)) && rows.every((el) => scope!.contains(el))))
     scope = scope.parentElement;
@@ -1297,9 +1601,53 @@ export function probeReportingScroll(account: string) {
     safe_bands: targets.map(({column_kind,band_index}) => ({column_kind,band_index})),
   };
   if (!targets.length) return { ...unavailable("reporting_target_occluded"), target_diagnostics };
+  const horizontalCandidates = new Set<HTMLElement>(
+    scope.querySelectorAll<HTMLElement>("*"),
+  );
+  for (const element of [...headers, ...rows]) {
+    for (
+      let ancestor = element.parentElement;
+      ancestor && ancestor !== document.body;
+      ancestor = ancestor.parentElement
+    )
+      horizontalCandidates.add(ancestor as HTMLElement);
+  }
+  const horizontal_offsets = [...horizontalCandidates]
+    .filter(
+      (el) =>
+        el.scrollWidth > el.clientWidth + 2 &&
+        ["auto", "scroll", "hidden"].includes(getComputedStyle(el).overflowX) &&
+        visible(el),
+    )
+    .slice(0, 16)
+    .map((el) => ({
+      scroll_left: el.scrollLeft,
+      client_width: el.clientWidth,
+      scroll_width: el.scrollWidth,
+      contains_headers: headers.some((header) => el.contains(header)),
+      contains_rows: rows.some((row) => el.contains(row)),
+    }));
+  const header_projection = headers
+    .filter(visible)
+    .map((header) => {
+      const rect = header.getBoundingClientRect();
+      return {
+        label: label(header).slice(0, 120),
+        left: Math.round(rect.left),
+        right: Math.round(rect.right),
+      };
+    });
   return {
     ready: true as const, signature: `${rows.length}:${hash >>> 0}`, rows: rows.length,
     x: targets[0].x, y: targets[0].y, targets,
-    deltaY: Math.min(600, Math.max(40, last.top - first.top)), target_diagnostics,
+    deltaY: Math.min(600, Math.max(40, last.top - first.top)),
+    deltaX: Math.min(600, Math.max(180, Math.round(innerWidth * 0.45))),
+    horizontal_offsets,
+    header_projection,
+    horizontal_signature: JSON.stringify({
+      offsets: horizontal_offsets.map((offset) => offset.scroll_left),
+      headers: header_projection,
+    }),
+    target_diagnostics,
   };
 }

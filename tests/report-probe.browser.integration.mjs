@@ -14,6 +14,14 @@ expect(realSpend.kind).toBe('selected');
 await page.evaluate(()=>document.querySelector('[role="dialog"]').innerHTML='<label><input checked type="checkbox">Amount spent</label><label><input checked type="checkbox">Amount spent</label>');
 const duplicate=await page.evaluate(()=>Probe.probeReportTarget({account:'123',op:'field',field:{key:'spend',labels:['Amount spent'],required:true}}));
 expect(duplicate.kind).toBe('missing');expect(duplicate.reason).toBe('Ambiguous report control');
+// The generic Results field can share its visible label with the ROAS result
+// field. A known context exclusion keeps the exact generic result selectable.
+await page.evaluate(()=>document.querySelector('[role="dialog"]').innerHTML='<li><input checked type="checkbox"><span>ผลลัพธ์</span><span>ROAS | ผลลัพธ์และการใช้จ่าย</span></li><li><input checked type="checkbox"><span>ผลลัพธ์</span><span>ผลลัพธ์และการใช้จ่าย | ผลลัพธ์</span></li>');
+const contextual=await page.evaluate(()=>Probe.probeReportTarget({account:'123',op:'field',field:{key:'results',labels:['Results','ผลลัพธ์'],exclude_terms:['ROAS'],required:true}}));
+expect(contextual.kind).toBe('selected');expect(contextual.diagnostics.matched_count).toBe(1);
+await page.evaluate(()=>document.querySelector('[role="dialog"]').innerHTML='<li><input checked type="checkbox"><span>จำนวนเงินที่ใช้จ่ายไป</span><span>เป็นเปอร์เซ็นต์ | เงินใช้จ่าย</span></li><li><input checked type="checkbox"><span>จำนวนเงินที่ใช้จ่ายไป</span><span>ผลลัพธ์และการใช้จ่าย | เงินใช้จ่าย</span></li>');
+const preferredSpend=await page.evaluate(()=>Probe.probeReportTarget({account:'123',op:'field',field:{key:'spend',labels:['Amount spent','จำนวนเงินที่ใช้จ่ายไป'],exclude_terms:['เป็นเปอร์เซ็นต์'],prefer_terms:['ผลลัพธ์และการใช้จ่าย'],required:true}}));
+expect(preferredSpend.kind).toBe('selected');expect(preferredSpend.diagnostics.matched_count).toBe(1);
 await page.evaluate(()=>document.querySelector('[role="dialog"]').innerHTML='<input aria-label="search columns" value="Budget"><label><input checked type="checkbox">Amount spent</label>');
 const stale=await page.evaluate(()=>Probe.probeReportTarget({account:'123',op:'field',query:'Amount spent',field:{key:'spend',labels:['Amount spent'],required:true}}));
 expect(stale.kind).toBe('wait');expect(stale.reason).toBe('Report search context changed');// A hidden stale spinner is not evidence that visible results are loading.

@@ -32,8 +32,16 @@ export type ReportProbe = {
     visible_busy_count: number;
     primary_match_count: number;
     helper_only_count: number;
-    candidates: { checked: boolean; visible: boolean; clipped: boolean; hit: boolean;
-      primary_match: boolean; helper_match: boolean }[];
+    candidates: {
+      label: string;
+      helper: string;
+      checked: boolean;
+      visible: boolean;
+      clipped: boolean;
+      hit: boolean;
+      primary_match: boolean;
+      helper_match: boolean;
+    }[];
   };
 };
 /** Read-only planner. No click/fill, page JS, network, cookies or arbitrary selectors. */
@@ -243,16 +251,37 @@ export function probeReportTarget(options: ReportProbeOptions): ReportProbe {
       }
     } else if (!names.length) names.push(label(e));
     const g = geometry(e), checked = e instanceof HTMLInputElement ? e.checked : e.getAttribute("aria-checked") === "true";
-    const primary_match = names.some(exact), helper_match = helper.some(exact);
+    const context = [...names, ...helper].map(norm).join(" ").toLowerCase();
+    const excluded = (field.exclude_terms ?? []).some((term) =>
+      context.includes(norm(term).toLowerCase()),
+    );
+    const preferred_match = !excluded && (field.prefer_terms ?? []).some((term) =>
+      context.includes(norm(term).toLowerCase()),
+    );
+    const primary_match = !excluded && names.some(exact),
+      helper_match = !excluded && helper.some(exact);
     let hit = false;
     if (g.visible) {
       const node = document.elementFromPoint(g.x, g.y);
       hit = !!node && (node === e || e.contains(node) || !!item && item.contains(node) &&
         item.querySelectorAll('input[type="checkbox"],[role="checkbox"]').length === 1);
     }
-    return { e, checked, visible: g.visible, clipped: g.clipped, hit, primary_match, helper_match };
+    return {
+      e,
+      names,
+      helper,
+      checked,
+      visible: g.visible,
+      clipped: g.clipped,
+      hit,
+      primary_match,
+      helper_match,
+      preferred_match,
+    };
   });
-  const matching = states.filter((state) => state.primary_match);
+  let matching = states.filter((state) => state.primary_match);
+  if (matching.some((state) => state.preferred_match))
+    matching = matching.filter((state) => state.preferred_match);
   const checkboxes = matching.filter((state) => state.visible).map((state) => state.e);
   const diagnostics: NonNullable<ReportProbe["diagnostics"]> = {
     matched_count: matching.length,
@@ -261,7 +290,16 @@ export function probeReportTarget(options: ReportProbeOptions): ReportProbe {
     primary_match_count: matching.filter((state) => state.visible).length,
     helper_only_count: states.filter((state) => !state.primary_match && state.helper_match).length,
     candidates: states.filter((state) => state.primary_match || state.helper_match).slice(0, 12)
-      .map(({ checked, visible, clipped, hit, primary_match, helper_match }) => ({ checked, visible, clipped, hit, primary_match, helper_match })),
+      .map(({ names, helper, checked, visible, clipped, hit, primary_match, helper_match }) => ({
+        label: names.join(" | ").slice(0, 240),
+        helper: helper.join(" | ").slice(0, 240),
+        checked,
+        visible,
+        clipped,
+        hit,
+        primary_match,
+        helper_match,
+      })),
   };
   const plan = target(checkboxes, "click");
   if (plan.kind === "click" && checkboxes.length === 1 && matching.find((state) => state.e === checkboxes[0])?.checked)

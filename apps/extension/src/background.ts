@@ -1,10 +1,17 @@
 import { z } from "zod";
 import {
+  type BreakdownQueryParam,
   botCommandSchema,
+  reportingUrl,
   suiteUrl,
 } from "../../../packages/core/src/control.js";
 import { controlUi, uiSession } from "./ui-controller.js";
-import { prepareReportWithInput, scrollReportWithInput } from "./report-input.js";
+import { configureBreakdownWithInput } from "./breakdown-input.js";
+import {
+  prepareReportWithInput,
+  scrollReportColumnsWithInput,
+  scrollReportWithInput,
+} from "./report-input.js";
 import {
   readVisibleTable,
   scrollReportingRows,
@@ -27,6 +34,8 @@ type Job = {
   level_warnings?: string[];
   /** Vertical paging evidence: methods tried and whether rows changed (no page text). */
   scroll_log?: { level: Level; step: number; moved: boolean; method: string; tried: unknown[]; reason?: string }[];
+  zoom?: { original: number; applied: number };
+  breakdown_params?: BreakdownQueryParam[];
   status: "running" | "paused" | "needs_review" | "error";
   error?: string;
   snapshots: ReturnType<typeof readVisibleTable>[];
@@ -118,6 +127,31 @@ async function getJob() {
 }
 async function put(job: Job) {
   await chrome.storage.local.set({ job });
+}
+const READ_ZOOM = 0.5;
+async function applyReadZoom(job: Job) {
+  try {
+    const current = await chrome.tabs.getZoom(job.tabId);
+    const original = job.zoom?.original ?? current;
+    const applied = Math.min(current, READ_ZOOM);
+    if (applied < current - 0.001) {
+      await chrome.tabs.setZoom(job.tabId, applied);
+      job.zoom = { original, applied };
+      await put(job);
+    }
+  } catch {
+    // Reading continues at the user's zoom if Chrome rejects the change.
+  }
+}
+async function restoreReadZoom(job: Job) {
+  if (!job.zoom) return;
+  try {
+    await chrome.tabs.setZoom(job.tabId, job.zoom.original);
+  } catch {
+    // The tab may have closed after a bounded collection.
+  }
+  delete job.zoom;
+  await put(job);
 }
 async function verifiedTab(job: Job) {
   const tab = await chrome.tabs.get(job.tabId);
@@ -224,7 +258,26 @@ async function advance() {
           func: scrollReportingTable,
           args: ["horizontal"],
         });
-        if (pan.result) {
+        let moved = !!pan.result;
+        if (!moved) {
+          const bridge = await getBridge();
+          const native = await scrollReportColumnsWithInput({
+            jobId: job.id,
+            tabId: job.tabId,
+            account: job.account,
+            enabled:
+              !!bridge?.enabled &&
+              bridge.tabId === job.tabId &&
+              bridge.account === job.account,
+          });
+          moved = native.moved;
+          if (!native.moved)
+            job.level_warnings = [
+              ...(job.level_warnings ?? []),
+              `${job.levels[job.index]}: ไม่ยืนยันการเลื่อนคอลัมน์ (${native.reason}) ข้อมูลรอบนี้ยังอาจไม่ครบ`,
+            ];
+        }
+        if (moved) {
           job.horizontal_step = (job.horizontal_step ?? 0) + 1;
           await put(job);
           setTimeout(() => void advance(), 1500);
@@ -239,7 +292,7 @@ async function advance() {
       job.horizontal_step = 0;
     }
     job.step++;
-    if (!same && job.step < job.maxSteps) {
+    if (job.step < job.maxSteps) {
       await put(job);
       const [scrolled] = await chrome.scripting.executeScript({
         target: { tabId: job.tabId },
@@ -290,19 +343,25 @@ async function advance() {
     job.step = 0;
     if (job.index >= job.levels.length) {
       job.status = "needs_review";
+      await restoreReadZoom(job);
       await put(job);
       await chrome.alarms.clear("collect");
       return;
     }
     await put(job);
     await chrome.tabs.update(job.tabId, {
-      url: `https://adsmanager.facebook.com/adsmanager/manage/${job.levels[job.index]}?act=${job.account}`,
+      url: reportingUrl(
+        job.account,
+        job.levels[job.index],
+        job.breakdown_params,
+      ).href,
     });
   } catch (e) {
     const job = await getJob();
     if (job && job.status === "running") {
       job.status = "error";
       job.error = e instanceof Error ? e.message : String(e);
+      await restoreReadZoom(job);
       await put(job);
     }
     await chrome.alarms.clear("collect");
@@ -380,6 +439,39 @@ async function perform(message: any) {
     return {
       ui,
       ...(!result.result.ok ? { ok: false, error: result.result.error } : {}),
+    };
+  }
+  if (message?.command === "breakdown.prepare") {
+    if (busy || (await getJob())?.status === "running")
+      throw new Error("พักงานอ่านตารางก่อนตั้ง Breakdown");
+    const validated = botCommandSchema.parse({
+      command: message.command,
+      dimensions: message.dimensions,
+    });
+    if (validated.command !== "breakdown.prepare")
+      throw new Error("Invalid breakdown command");
+    const bridge = await getBridge();
+    if (!bridge?.enabled) throw new Error("เชื่อมต่อ Extension ก่อน");
+    const tab = await chrome.tabs.get(bridge.tabId);
+    suiteUrl(tab.url ?? "", bridge.account);
+    if (tab.status !== "complete")
+      throw new Error("รอหน้า Meta โหลดก่อนตั้ง Breakdown");
+    await chrome.tabs.update(bridge.tabId, { active: true });
+    if (tab.windowId !== undefined)
+      await chrome.windows.update(tab.windowId, { focused: true });
+    const breakdown = await configureBreakdownWithInput(
+      bridge,
+      validated.dimensions,
+    );
+    const inspected = await controlUi(
+      { command: "ui.action", action: { type: "inspect", max_controls: 150 } },
+      bridge,
+    );
+    return {
+      ui: { ...inspected.ui, breakdown },
+      ...(!breakdown.ok
+        ? { ok: false, error: breakdown.error ?? "Breakdown setup failed" }
+        : {}),
     };
   }
   if (message?.command === "reportInputSession") {
@@ -487,6 +579,7 @@ async function perform(message: any) {
       const job = await getJob();
       if (job) {
         job.status = "paused";
+        await restoreReadZoom(job);
         await put(job);
       }
       await chrome.alarms.clear("collect");
@@ -509,10 +602,14 @@ async function perform(message: any) {
       const resumeTab = await verifiedTab(job);
       await chrome.tabs.update(job.tabId, { active: true });
       if (resumeTab.windowId !== undefined)
-        await chrome.windows.update(resumeTab.windowId, { focused: true });
+        await chrome.windows.update(resumeTab.windowId, {
+          focused: true,
+          state: "maximized",
+        });
       job.status = "running";
       delete job.error;
       await put(job);
+      await applyReadZoom(job);
       await chrome.alarms.create("collect", { periodInMinutes: 0.5 });
       void advance();
       return { job };
@@ -552,11 +649,26 @@ async function perform(message: any) {
         snapshots: [],
       };
       const startTab = await verifiedTab(job);
+      job.breakdown_params = [...new URL(startTab.url!).searchParams]
+        .filter(
+          ([key, value]) =>
+            /^[a-z0-9_]{1,64}_breakdown$/i.test(key) &&
+            /^[a-z0-9_,.-]{1,100}$/i.test(value),
+        )
+        .map(([key, value]) => [key, value] as const);
       if (startTab.windowId !== undefined)
-        await chrome.windows.update(startTab.windowId, { focused: true });
+        await chrome.windows.update(startTab.windowId, {
+          focused: true,
+          state: "maximized",
+        });
       await put(job);
+      await applyReadZoom(job);
       await chrome.tabs.update(tabId, {
-        url: `https://adsmanager.facebook.com/adsmanager/manage/${levels[0]}?act=${account}`,
+        url: reportingUrl(
+          account,
+          levels[0],
+          job.breakdown_params,
+        ).href,
         active: true,
       });
       await chrome.alarms.create("collect", { periodInMinutes: 0.5 });

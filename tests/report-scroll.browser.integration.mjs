@@ -7,7 +7,7 @@ import path from "node:path";
 const bundle = await build({
   stdin: {
     contents:
-      "export {scrollReportWithInput} from './apps/extension/src/report-input.ts'; export {readVisibleTable} from './apps/extension/src/reader.ts';",
+      "export {scrollReportColumnsWithInput,scrollReportWithInput} from './apps/extension/src/report-input.ts'; export {probeReportingScroll,readVisibleTable} from './apps/extension/src/reader.ts';",
     resolveDir: process.cwd(),
   },
   bundle: true,
@@ -184,8 +184,71 @@ try {
   expect(paused.moved).toBe(false);
   expect(paused.reason).toBe("collection_context_changed");
   expect(await page.evaluate(() => window.wheels.length)).toBe(1);
+  await context.unroute("https://adsmanager.facebook.com/**");
+  const horizontalPage = await context.newPage();
+  await context.route(
+    "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=123456789",
+    (r) =>
+      r.fulfill({
+        contentType: "text/html; charset=utf-8",
+        body: `<div id="hscroll" style="width:900px;height:300px;overflow-x:hidden;overflow-y:hidden">
+<div role="grid" style="display:grid;grid-template-columns:400px 400px 400px 400px;width:1600px">
+<div role="row" style="display:contents"><div role="columnheader" style="position:sticky;left:0;z-index:2;background:white">On / Off</div><div role="columnheader">Campaign</div><div role="columnheader">Amount spent</div><div role="columnheader">Impressions</div></div>
+<div role="row" style="display:contents"><div role="gridcell" style="position:sticky;left:0;z-index:1;background:white"><div role="switch" style="width:40px;height:25px"></div></div><div role="gridcell"><a href="/adsmanager/manage/campaigns?act=123456789&selected_campaign_ids=111">Campaign A</a></div><div role="gridcell">100</div><div role="gridcell">1000</div></div>
+<div role="row" style="display:contents"><div role="gridcell" style="position:sticky;left:0;z-index:1;background:white"><div role="switch" style="width:40px;height:25px"></div></div><div role="gridcell"><a href="/adsmanager/manage/campaigns?act=123456789&selected_campaign_ids=222">Campaign B</a></div><div role="gridcell">200</div><div role="gridcell">2000</div></div>
+</div></div>
+<script>window.horizontalWheels=0;document.querySelector('#hscroll').addEventListener('wheel',e=>{if(!e.isTrusted)return;window.horizontalWheels++;document.querySelector('#hscroll').scrollLeft+=Math.max(50,e.deltaX);});</script>`,
+      }),
+  );
+  await horizontalPage.goto(
+    "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=123456789",
+  );
+  await horizontalPage.bringToFront();
+  await expect(horizontalPage.locator('[role="switch"]')).toHaveCount(2);
+  await horizontalPage.addScriptTag({ content: bundle.outputFiles[0].text });
+  const directProbe = await horizontalPage.evaluate(() =>
+    ScrollFixture.probeReportingScroll("123456789"),
+  );
+  expect(directProbe.ready, JSON.stringify(directProbe)).toBe(true);
+  const horizontalTabId = await worker.evaluate(
+    async () =>
+      (await chrome.tabs.query({ active: true, currentWindow: true })).find(
+        (t) => t.url?.includes("/manage/campaigns?act=123456789"),
+      )?.id,
+  );
+  const horizontalBinding = {
+    tabId: horizontalTabId,
+    account: "123456789",
+    enabled: true,
+    jobId: "horizontal-fixture",
+  };
+  await worker.evaluate(async (b) => {
+    await chrome.storage.local.set({
+      bridge: { tabId: b.tabId, account: b.account, enabled: true },
+      job: {
+        id: b.jobId,
+        tabId: b.tabId,
+        account: b.account,
+        status: "running",
+      },
+    });
+    await chrome.storage.session.set({
+      reportInputLease: {
+        tabId: b.tabId,
+        account: b.account,
+        expires_at: Date.now() + 900000,
+      },
+    });
+  }, horizontalBinding);
+  const horizontal = await worker.evaluate(
+    (b) => ScrollFixture.scrollReportColumnsWithInput(b),
+    horizontalBinding,
+  );
+  expect(horizontal.moved, JSON.stringify(horizontal)).toBe(true);
+  expect(await horizontalPage.locator("#hscroll").evaluate((e) => e.scrollLeft)).toBeGreaterThan(0);
+  expect(await horizontalPage.evaluate(() => window.horizontalWheels)).toBe(1);
   console.log(
-    "Native scroll fixture passed: inert safe band and metric refresh do not stop fallback to responsive reporting body; bounded input and detach",
+    "Native scroll fixture passed: inert safe band, metric refresh, guarded vertical paging and horizontal column pan; bounded input and detach",
   );
 } finally {
   await context.close();
