@@ -264,6 +264,7 @@ export function readVisibleTable() {
         campaign_id: campaign.size === 1 ? [...campaign][0] : null,
         ad_set_id: adset.size === 1 ? [...adset][0] : null,
       },
+      parent_conflicts: {campaign_id:campaign.size>1,ad_set_id:adset.size>1},
     };
   };
   type Observation = {
@@ -284,10 +285,12 @@ export function readVisibleTable() {
     cells: { header: string; text: string }[],
     rowWarnings: string[],
   ) => {
-    const idCell = cells.find((c) => idHeaderPattern.test(c.header));
-    const columnId =
-      idCell && /^\d+$/.test(idCell.text.trim()) ? idCell.text.trim() : null;
-    if (found.conflict) rowWarnings.push("Row links expose more than one ID; identity left unverified.");
+    const columnIds = new Set(cells.filter((c)=>idHeaderPattern.test(c.header)&&/^\d+$/.test(c.text.trim())).map(c=>c.text.trim()));
+    const columnId = columnIds.size===1?[...columnIds][0]:null;
+    if (found.conflict||columnIds.size>1) {
+      rowWarnings.push("Row links or ID columns expose more than one ID; identity left unverified.");
+      return {identity:null,identity_source:null};
+    }
     if (columnId && found.id && columnId !== found.id) {
       rowWarnings.push("ID column and row link disagree; identity left unverified.");
       return { identity: null, identity_source: null };
@@ -295,6 +298,31 @@ export function readVisibleTable() {
     if (found.id) return { identity: found.id, identity_source: "row_link_href" as const };
     if (columnId) return { identity: columnId, identity_source: "id_column" as const };
     return { identity: null, identity_source: null };
+  };
+  const resolveParents = (
+    found:ReturnType<typeof linkIds>,
+    cells:{header:string;text:string}[],
+    rowWarnings:string[],
+    allowColumnIds:boolean,
+  ) => {
+    const result={campaign_id:null as string|null,ad_set_id:null as string|null};
+    const fields: {key:"campaign_id"|"ad_set_id";pattern:RegExp}[]=[];
+    if(level!=="campaigns")fields.push({key:"campaign_id",pattern:/^(campaign id|id แคมเปญ|รหัสแคมเปญ)$/i});
+    if(level==="ads")fields.push({key:"ad_set_id",pattern:/^(ad set id|id ชุดโฆษณา|รหัสชุดโฆษณา)$/i});
+    for(const {key,pattern} of fields){
+      const ids=new Set(allowColumnIds?cells.filter(c=>pattern.test(c.header.trim())&&/^\d+$/.test(c.text.trim())).map(c=>c.text.trim()):[]);
+      if(found.parent_conflicts[key]||ids.size>1){
+        rowWarnings.push(`Conflicting parent ${key} evidence; parent ID left unverified.`);
+        continue;
+      }
+      const column=ids.size===1?[...ids][0]:null,link=found.parent_ids[key];
+      if(column&&link&&column!==link){
+        rowWarnings.push(`Parent ${key} column and row link disagree; parent ID left unverified.`);
+        continue;
+      }
+      result[key]=link??column;
+    }
+    return result;
   };
   for (const grid of grids) {
     const headers = [
@@ -328,7 +356,7 @@ export function readVisibleTable() {
       const identity = resolveIdentity(found, rowCells, rowWarnings);
       row_observations.push({
         ...identity,
-        parent_ids: found.parent_ids,
+        parent_ids: resolveParents(found,rowCells,rowWarnings,true),
         name:
           rowCells.find((c) => nameHeaderPattern.test(c.header))?.text.split("\n")[0] ??
           null,
@@ -342,32 +370,72 @@ export function readVisibleTable() {
   // Header/body alignment: Meta renders headers and rows in separate horizontal
   // scrollers. If their offsets differ, geometric column mapping is invalid.
   let column_alignment: "aligned" | "mismatch" | "not_applicable" = "not_applicable";
+  let row_alignment:"aligned"|"mismatch"|"unverified"="aligned";
+  const row_alignment_diagnostics:{compared_cells:number;pairs:{row_index:number;identity_scroll_top:number;metric_scroll_top:number;independent_transform:boolean;independent_owner:boolean}[]}={compared_cells:0,pairs:[]};
+  const column_alignment_diagnostics: {
+    scrollers: {role:"header"|"body_markers"|"body_text";included:boolean;scroll_left:number;client_width:number;scroll_width:number;range:number;left:number;right:number;contains_rows:boolean}[];
+    truncated:boolean;
+  } = {scrollers:[],truncated:false};
   const rowMarkerSelector =
     '[role="switch"],input[type="checkbox"],[role="checkbox"],[role="row"],[role="gridcell"]';
   if (observedHeaders.length >= 2) {
     const headerEls = [
       ...document.querySelectorAll<HTMLElement>('[role="columnheader"]'),
     ];
+    let alignmentScope:Element|null=headerEls[0]?.parentElement??null;
+    while(alignmentScope&&!headerEls.every(h=>alignmentScope!.contains(h)))alignmentScope=alignmentScope.parentElement;
+    while(alignmentScope&&alignmentScope!==document.body&&![...alignmentScope.querySelectorAll(rowMarkerSelector)].some(m=>!m.closest('[role="columnheader"]')))
+      alignmentScope=alignmentScope.parentElement;
     const scrollers = [...document.querySelectorAll<HTMLElement>("*")].filter(
       (el) =>
+        !!alignmentScope?.contains(el) &&
         el.scrollWidth > el.clientWidth + 2 &&
         ["auto", "scroll", "hidden"].includes(getComputedStyle(el).overflowX) &&
         visible(el),
     );
-    const headerScrollers = scrollers.filter((el) =>
-      headerEls.some((h) => el.contains(h)),
-    );
-    const bodyScrollers = scrollers.filter(
-      (el) =>
-        !headerEls.some((h) => el.contains(h)) &&
-        [...el.querySelectorAll(rowMarkerSelector)].some(
-          (m) => !m.closest('[role="columnheader"]'),
-        ),
-    );
+    const containsHeaders=(el:Element)=>headerEls.some(h=>el.contains(h));
+    const containsRows=(el:Element)=>[...el.querySelectorAll(rowMarkerSelector)].some(m=>!m.closest('[role="columnheader"]')&&!headerEls.some(h=>m.contains(h)));
+    const numericHeaders=observedHeaders.filter(h=>!/^(?:ad|ad name|campaign|campaign name|ad set|ad set name|โฆษณา|ชื่อโฆษณา|แคมเปญ|ชื่อแคมเปญ|ชุดโฆษณา|ชื่อชุดโฆษณา|on\s*\/\s*off|off\s*\/\s*on|ปิด\s*\/\s*เปิด|เปิด\s*\/\s*ปิด)$/i.test(h.label));
+    const centers=[...document.querySelectorAll<HTMLElement>('[role="switch"],input[type="checkbox"],[role="checkbox"]')]
+      .filter(el=>visible(el)&&!el.closest('[role="columnheader"]')&&el.getBoundingClientRect().top>headersBottom)
+      .map(el=>{const r=el.getBoundingClientRect();return r.top+r.height/2;}).sort((a,b)=>a-b)
+      .filter((y,i,all)=>i===0||Math.abs(y-all[i-1])>8);
+    const metricRows=(el:Element)=>{
+      if(el.closest('form,[role="dialog"],[aria-modal="true"]'))return false;
+      const rect=el.getBoundingClientRect(),seen=new Set<number>();
+      const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);let visited=0;
+      while(walker.nextNode()&&visited++<5000){
+        const parent=walker.currentNode.parentElement,text=walker.currentNode.textContent?.trim();
+        if(!parent||!text||!visible(parent)||parent.closest('input,textarea,select,button,[role="button"],[role="columnheader"],[contenteditable="true"],script,style')||
+          !/^(?:[฿$€£]?\s*\d[\d,.]*(?:\s*%)?|[—–-])$/.test(text))continue;
+        const range=document.createRange();range.selectNodeContents(walker.currentNode);const r=range.getBoundingClientRect();
+        const x=r.left+r.width/2,y=r.top+r.height/2;
+        if(!r.width||!r.height||x<Math.max(0,rect.left)||x>Math.min(innerWidth,rect.right)||y<Math.max(headersBottom,rect.top)||y>Math.min(innerHeight,rect.bottom)||
+          !numericHeaders.some(h=>x>=h.rect.left&&x<=h.rect.right))continue;
+        const row=centers.findIndex((center,i)=>y>=(i?(centers[i-1]+center)/2:center-30)&&y<(i<centers.length-1?(center+centers[i+1])/2:center+30));
+        if(row>=0)seen.add(row);
+        if(seen.size>=(containsRows(el)?1:2))return true;
+      }
+      return false;
+    };
+    const innermost=(candidates:HTMLElement[])=>candidates.filter(el=>!candidates.some(other=>el!==other&&el.contains(other)));
+    const numericHeaderEls=headerEls.filter(h=>numericHeaders.some(n=>n.label===(h.innerText||h.textContent||"").trim()));
+    const headerScrollers=innermost(scrollers.filter(el=>numericHeaderEls.some(h=>el.contains(h))));
+    const bodyScrollers=innermost(scrollers.filter(el=>!containsHeaders(el)&&metricRows(el)));
+    const described=scrollers.filter(el=>containsHeaders(el)||containsRows(el)||bodyScrollers.includes(el));
+    column_alignment_diagnostics.truncated=described.length>24;
+    column_alignment_diagnostics.scrollers=described.slice(0,24).map(el=>{
+      const rect=el.getBoundingClientRect(),hasRows=containsRows(el);
+      return {role:containsHeaders(el)?"header":hasRows?"body_markers":"body_text",included:headerScrollers.includes(el)||bodyScrollers.includes(el),
+        scroll_left:el.scrollLeft,client_width:el.clientWidth,scroll_width:el.scrollWidth,range:el.scrollWidth-el.clientWidth,
+        left:Math.round(rect.left),right:Math.round(rect.right),contains_rows:hasRows};
+    });
     column_alignment = "aligned";
     for (const h of headerScrollers)
       for (const b of bodyScrollers)
         if (Math.abs(h.scrollLeft - b.scrollLeft) > 1) column_alignment = "mismatch";
+    if(headerScrollers.some(h=>Math.abs(h.scrollLeft)>1&&!containsRows(h))&&!bodyScrollers.length)
+      column_alignment="mismatch"; // A moved header without a verified body is not alignment proof.
     if (column_alignment === "mismatch")
       warnings.push(
         "Header and body scroll offsets differ; column mapping is rejected for this capture.",
@@ -463,6 +531,24 @@ export function readVisibleTable() {
       const inFooter = (top: number, bottom: number) =>
         footers.some((f) => (top + bottom) / 2 >= f.top && (top + bottom) / 2 <= f.bottom);
       const cells = anchors.map(() => new Map<string, string[]>());
+      const verticalState=(element:Element)=>{
+        let scroll_top=0;
+        const transforms:Element[]=[];
+        const owners:Element[]=[];
+        for(let a:Element|null=element;a&&a!==scope;a=a.parentElement){
+          const style=getComputedStyle(a);
+          if(a.scrollHeight>a.clientHeight+2&&["hidden","auto","scroll"].includes(style.overflowY)){scroll_top+=a.scrollTop;owners.push(a);}
+          if(style.transform!=="none"){
+            try{
+              const matrix=new DOMMatrixReadOnly(style.transform);
+              if(Math.abs(matrix.m42)>0.1||Math.abs(matrix.m22-1)>0.001||Math.abs(matrix.m12)>0.001||Math.abs(matrix.m21)>0.001)transforms.push(a);
+            }catch{transforms.push(a);}
+          }
+        }
+        return {scroll_top,transforms,owners};
+      };
+      const identityStates=anchors.map(a=>verticalState(a.el));
+      const recordedPairs=new Set<string>();
       const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
       while (walker.nextNode()) {
         const node = walker.currentNode,
@@ -523,6 +609,22 @@ export function readVisibleTable() {
         if (row < 0 || headers.length !== 1) continue;
         const h = headers[0].label,
           parts = cells[row].get(h) ?? [];
+        // Geometric Y bands cannot join frozen IDs to newly scrolled metric
+        // values. Compare their actual vertical owners before trusting a row.
+        if(!/^(?:on\s*\/\s*off|off\s*\/\s*on|ปิด\s*\/\s*เปิด|เปิด\s*\/\s*ปิด)$/i.test(h)&&
+          !(nameHeaderPattern.test(h)&&parent.closest('button,[role="button"]'))){
+          const identity=identityStates[row],metric=verticalState(parent);
+          const independent_transform=metric.transforms.some(a=>!identity.transforms.includes(a))||identity.transforms.some(a=>!metric.transforms.includes(a));
+          const independent_owner=metric.owners.some(a=>!identity.owners.includes(a))||identity.owners.some(a=>!metric.owners.includes(a));
+          const mismatch=Math.abs(identity.scroll_top-metric.scroll_top)>1;
+          if(mismatch)row_alignment="mismatch";
+          else if(independent_transform&&row_alignment!=="mismatch")row_alignment="unverified";
+          row_alignment_diagnostics.compared_cells++;
+          const key=`${row}:${identity.scroll_top}:${metric.scroll_top}:${independent_transform}:${independent_owner}`;
+          if(!recordedPairs.has(key)&&row_alignment_diagnostics.pairs.length<12){
+            recordedPairs.add(key);row_alignment_diagnostics.pairs.push({row_index:row,identity_scroll_top:identity.scroll_top,metric_scroll_top:metric.scroll_top,independent_transform,independent_owner});
+          }
+        }
         parts.push(text);
         cells[row].set(h, parts);
       }
@@ -572,14 +674,17 @@ export function readVisibleTable() {
         const idColumnOk =
           identity.identity_source === "id_column" && !!nameHeader && map.has(nameHeader.label);
         const column_mapping =
-          column_alignment !== "mismatch" && (linkInName || idColumnOk)
+          column_alignment !== "mismatch" && row_alignment === "aligned" && (linkInName || idColumnOk)
             ? ("verified_geometry" as const)
             : ("unverified" as const);
         if (column_mapping === "unverified")
           rowWarnings.push("Column mapping unverified for this row.");
+        if(row_alignment!=="aligned")rowWarnings.push(row_alignment==="mismatch"
+          ?"Identity and metric vertical scroll offsets differ; row association is unverified."
+          :"Independent vertical transforms prevent verification of identity/metric row association.");
         row_observations.push({
           ...identity,
-          parent_ids: found.parent_ids,
+          parent_ids: resolveParents(found,rowCells,rowWarnings,column_mapping==="verified_geometry"),
           name: nameHeader
             ? (map.get(nameHeader.label)?.[0] ?? null)
             : null,
@@ -591,6 +696,9 @@ export function readVisibleTable() {
       });
     }
   }
+  if(row_alignment!=="aligned")warnings.push(row_alignment==="mismatch"
+    ?"Identity and metric panes are vertically out of sync; geometric rows must not be normalized or ranked."
+    :"Vertical identity/metric row association is unverified; geometric rows must not be normalized or ranked.");
   // IDs repeated across rows of one snapshot are not stable identities.
   const idCounts = new Map<string, number>();
   for (const r of row_observations)
@@ -646,9 +754,14 @@ export function readVisibleTable() {
     /^(attribution setting|การตั้งค่าการระบุที่มา|การตั้งค่าการระบุแหล่งที่มา)$/i.test(h.label),
   );
   if (attributionHeader) evidence.attribution = "row_column";
+  // A missing breakdown/filter control does not prove that no restriction is
+  // active. Keep scope unknown until an explicit supported observation exists.
+  evidence.breakdown = "unverified";
+  evidence.filters = "unverified";
+  warnings.push("Breakdown and filter scope are unverified; visible rows cannot certify whole-account coverage.");
   return {
     account_id: url.searchParams.get("act"),
-    reader_version: "0.6.2",
+    reader_version: "0.6.5",
     page: url.pathname,
     level,
     captured_at: new Date().toISOString(),
@@ -658,6 +771,9 @@ export function readVisibleTable() {
     format: tables.length ? "structured" : "visible_text_fallback",
     unstructured,
     column_alignment,
+    column_alignment_diagnostics,
+    row_alignment,
+    row_alignment_diagnostics,
     header_mode: headerMode,
     reporting_context: {
       date_range_label:
@@ -670,6 +786,8 @@ export function readVisibleTable() {
       attribution: "unverified",
       timezone,
       currency,
+      breakdown: null,
+      filters: null,
       evidence,
     },
     coverage: "visible_only",
@@ -710,6 +828,31 @@ export function scrollReportingTable(
     rowScope = rowScope.parentElement;
   if (rowScope && rowScope !== document.body) scope = rowScope;
   const horizontal = direction !== "vertical";
+  const horizontalHeaderBottom = Math.max(0, ...headers.filter(visible).map((h)=>h.getBoundingClientRect().bottom));
+  const numericHeaders = headers.filter((h)=>visible(h) && !/^(?:ad|ad name|campaign|campaign name|ad set|ad set name|โฆษณา|ชื่อโฆษณา|แคมเปญ|ชื่อแคมเปญ|ชุดโฆษณา|ชื่อชุดโฆษณา|on\s*\/\s*off|off\s*\/\s*on|ปิด\s*\/\s*เปิด|เปิด\s*\/\s*ปิด)$/i.test((h.textContent??"").trim()));
+  const horizontalAnchors = [...(scope?.querySelectorAll<HTMLElement>('[role="switch"],input[type="checkbox"],[role="checkbox"]')??[])]
+    .filter((el)=>visible(el)&&!el.closest('[role="columnheader"]')&&el.getBoundingClientRect().top>horizontalHeaderBottom)
+    .map((el)=>{const r=el.getBoundingClientRect();return r.top+r.height/2;}).sort((a,b)=>a-b)
+    .filter((y,i,all)=>i===0||Math.abs(y-all[i-1])>8);
+  const metricRows = (el:Element) => {
+    if (el.closest('form,[role="dialog"],[aria-modal="true"]')) return false;
+    const rect=el.getBoundingClientRect(), seen=new Set<number>();
+    const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);
+    let visited=0;
+    while(walker.nextNode()&&visited++<5000){
+      const parent=walker.currentNode.parentElement, text=walker.currentNode.textContent?.trim();
+      if(!parent||!text||!visible(parent)||parent.closest('input,textarea,select,button,[role="button"],[role="columnheader"],[contenteditable="true"],script,style')||
+        !/^(?:[฿$€£]?\s*\d[\d,.]*(?:\s*%)?|[—–-])$/.test(text))continue;
+      const range=document.createRange();range.selectNodeContents(walker.currentNode);const r=range.getBoundingClientRect();
+      const x=r.left+r.width/2,y=r.top+r.height/2;
+      if(!r.width||!r.height||x<Math.max(0,rect.left)||x>Math.min(innerWidth,rect.right)||y<Math.max(horizontalHeaderBottom,rect.top)||y>Math.min(innerHeight,rect.bottom)||
+        !numericHeaders.some(h=>{const b=h.getBoundingClientRect();return x>=b.left&&x<=b.right;}))continue;
+      const row=horizontalAnchors.findIndex((center,i)=>y>=(i?(horizontalAnchors[i-1]+center)/2:center-30)&&y<(i<horizontalAnchors.length-1?(center+horizontalAnchors[i+1])/2:center+30));
+      if(row>=0)seen.add(row);
+      if(seen.size>=(hasRows(el)?1:2))return true;
+    }
+    return false;
+  };
   while (
     scope &&
     scope !== document.body &&
@@ -724,10 +867,13 @@ export function scrollReportingTable(
         : el.scrollHeight > el.clientHeight + 2 &&
             ["auto", "scroll"].includes(style.overflowY);
     });
-    // A reporting scroller must contain headers or row controls, not a toolbar dropdown.
-    const reporting = candidates.filter(
-      (el) => headers.some((h) => el.contains(h)) || el.querySelector(rowMarkers),
-    );
+    // Main metric bodies may have no switches/checkboxes (those live in a
+    // frozen name pane). Require numeric cells in observed row/column bands;
+    // row markers alone never authorize panning a frozen name-only pane.
+    const matched = candidates.filter((el) => (horizontal ? numericHeaders : headers).some((h) => el.contains(h)) ||
+      (horizontal&&headers.some(h=>el.contains(h))&&hasRows(el)) ||
+      (horizontal ? metricRows(el) : !!el.querySelector(rowMarkers)));
+    const reporting = horizontal ? matched.filter((el)=>!matched.some(other=>other!==el&&el.contains(other))) : matched;
     if (!horizontal) {
       const scroller = reporting.find((el) =>
         ["auto", "scroll"].includes(getComputedStyle(el).overflowY),
@@ -738,6 +884,9 @@ export function scrollReportingTable(
         return scroller.scrollTop !== before;
       }
     } else if (reporting.length) {
+      const pairedBody = reporting.some((el)=>metricRows(el)||
+        (headers.some((h)=>el.contains(h))&&hasRows(el)));
+      if (!pairedBody) return false; // Never move a separate header without its verified reporting body.
       // Header and body may be separate scrollers. Move every reporting
       // scroller to the same offset so header bands stay over their cells.
       const user = reporting.find((el) =>
@@ -905,26 +1054,39 @@ export async function scrollReportingRows() {
         return true;
       })
       .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-  // Signature of what is on screen: which anchor elements are visible, where, and the
-  // short text right of each (recycled virtual rows keep elements but change text).
-  const ids = new WeakMap<Element, number>();
-  let next = 0;
-  const idOf = (el: Element) => {
-    if (!ids.has(el)) ids.set(el, next++);
-    return ids.get(el)!;
+  // Compare row identities/name cells and actual body offsets, never metric
+  // samples or page coordinates (a refresh/page nudge is not row paging).
+  const nameHeader = headers.find((h) => /^(ad|ad name|โฆษณา|ชื่อโฆษณา|ad set|ad set name|ชุดโฆษณา|ชื่อชุดโฆษณา|campaign|campaign name|แคมเปญ|ชื่อแคมเปญ)$/i.test((h.textContent ?? "").trim()));
+  const level = location.pathname.replace(/\/$/, "").split("/").at(-1);
+  const idParam = level === "ads" ? "selected_ad_ids" : level === "adsets" ? "selected_adset_ids" : "selected_campaign_ids";
+  const signature = () => {
+    const current = rows();
+    const band = nameHeader?.getBoundingClientRect();
+    const names = current.map((el, i) => {
+      const r = el.getBoundingClientRect(), y = r.top + r.height / 2;
+      const previous = current[i - 1]?.getBoundingClientRect(), next = current[i + 1]?.getBoundingClientRect();
+      const low = previous ? (previous.top + previous.height / 2 + y) / 2 : y - 30;
+      const high = next ? (next.top + next.height / 2 + y) / 2 : y + 30;
+      const ids = new Set([...document.querySelectorAll<HTMLAnchorElement>('a[href]')].filter(visible).flatMap((a) => {
+        const rect = a.getBoundingClientRect(), cy = rect.top + rect.height / 2;
+        if (!band || cy < low || cy >= high || rect.left + rect.width / 2 < band.left || rect.left + rect.width / 2 > band.right) return [];
+        const link = new URL(a.href, location.href), id = link.searchParams.get(idParam);
+        return ["adsmanager.facebook.com", "business.facebook.com"].includes(link.hostname) && id && /^\d+$/.test(id) ? [id] : [];
+      }));
+      if (ids.size === 1) return `id:${[...ids][0]}`;
+      if (!band) return "";
+      const hit = document.elementFromPoint(Math.min(innerWidth - 2, Math.max(2, band.left + 20)), y);
+      const rect = hit?.getBoundingClientRect();
+      return rect && rect.left >= band.left - 2 && rect.right <= band.right + 2
+        ? `name:${(hit?.textContent ?? "").trim().slice(0, 250)}` : "";
+    });
+    const offsets: number[] = [];
+    for (let a = current[0]?.parentElement; a; a = a.parentElement) {
+      if (a.scrollHeight > a.clientHeight + 2 && !headers.some((h) => a!.contains(h)) &&
+        ["auto", "scroll", "hidden"].includes(getComputedStyle(a).overflowY)) offsets.push(a.scrollTop);
+    }
+    return JSON.stringify({ names, offsets });
   };
-  const signature = () =>
-    rows()
-      .map((el) => {
-        const r = el.getBoundingClientRect();
-        const y = r.top + r.height / 2;
-        const texts = [40, 120, 240].map((dx) => {
-          const t = (document.elementFromPoint(Math.min(innerWidth - 2, r.right + dx), y)?.textContent ?? "").trim();
-          return t.length < 300 ? t.slice(0, 80) : "";
-        });
-        return `${idOf(el)}@${Math.round(y)}:${texts.join("/")}`;
-      })
-      .join("|");
   const anchors = rows();
   if (anchors.length < 2) return { moved: false, method: "none", tried, reason: "fewer_than_two_rows" };
   const last = anchors[anchors.length - 1];
@@ -962,4 +1124,182 @@ export async function scrollReportingRows() {
   moved = changed();
   tried.push({ method: "scroll_into_view", moved });
   return { moved, method: moved ? "scroll_into_view" : "none", tried };
+}
+
+/** Read-only planning for one bounded native report wheel. No selectors or
+ * coordinates are accepted remotely; only a guarded Extension caller uses it.
+ * The fingerprint stays opaque so diagnostics do not include customer text.
+ */
+export function probeReportingScroll(account: string) {
+  const u = new URL(location.href);
+  const unavailable = (reason: string) => ({ ready: false as const, reason });
+  if (u.protocol !== "https:" || u.port ||
+    !["adsmanager.facebook.com", "business.facebook.com"].includes(u.hostname) ||
+    !/^\/adsmanager\/manage\/(campaigns|adsets|ads)\/?$/.test(u.pathname) ||
+    u.searchParams.get("act") !== account)
+    return unavailable("reporting_context_changed");
+  const visible = (el: Element) => {
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && r.top < innerHeight && r.bottom > 0 &&
+      r.left < innerWidth && r.right > 0 && s.display !== "none" && s.visibility !== "hidden";
+  };
+  if ([...document.querySelectorAll('[role="dialog"],[aria-modal="true"]')].some(visible))
+    return unavailable("reporting_view_blocked");
+  const headers = [...document.querySelectorAll('[role="columnheader"],thead th')].filter(visible);
+  if (headers.length < 2) return unavailable("no_reporting_headers");
+  const bottom = Math.max(...headers.map((el) => el.getBoundingClientRect().bottom));
+  const below = (el: Element) => {
+    if (!visible(el) || el.closest('[role="columnheader"],thead')) return false;
+    const r = el.getBoundingClientRect(), cy = r.top + r.height / 2;
+    if (cy <= bottom || r.bottom > innerHeight) return false;
+    for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+      if (getComputedStyle(a).overflowY === "visible") continue;
+      const clip = a.getBoundingClientRect();
+      if (cy < clip.top || cy > clip.bottom) return false;
+    }
+    return true;
+  };
+  let markers = [...document.querySelectorAll<HTMLElement>('[role="switch"],input[type="checkbox"],[role="checkbox"]')].filter(below);
+  if (!markers.length)
+    markers = [...document.querySelectorAll<HTMLElement>('[role="row"],tbody tr')].filter(below);
+  markers.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+  // A row can have both a checkbox and switch: take one anchor per row band.
+  const rows = markers.filter((el, i) => i === 0 ||
+    Math.abs(el.getBoundingClientRect().top - markers[i - 1].getBoundingClientRect().top) > 8);
+  if (!rows.length) return unavailable("no_visible_reporting_rows");
+  let scope: Element | null = rows[0].parentElement;
+  while (scope && !(headers.every((el) => scope!.contains(el)) && rows.every((el) => scope!.contains(el))))
+    scope = scope.parentElement;
+  if (!scope) return unavailable("no_reporting_scope");
+  const level = u.pathname.replace(/\/$/, "").split("/").at(-1);
+  const label = (el: Element) => ((el as HTMLElement).innerText || el.textContent || "").trim();
+  const namePattern = level === "ads" ? /^(ad|ad name|โฆษณา|ชื่อโฆษณา)$/i
+    : level === "adsets" ? /^(ad set|ad set name|ชุดโฆษณา|ชื่อชุดโฆษณา)$/i
+    : /^(campaign|campaign name|แคมเปญ|ชื่อแคมเปญ)$/i;
+  const idPattern = level === "ads" ? /^(ad id|id โฆษณา|รหัสโฆษณา)$/i
+    : level === "adsets" ? /^(ad set id|id ชุดโฆษณา|รหัสชุดโฆษณา)$/i
+    : /^(campaign id|id แคมเปญ|รหัสแคมเปญ)$/i;
+  const nameBand = headers.find((el) => namePattern.test(label(el)))?.getBoundingClientRect();
+  const idBand = headers.find((el) => idPattern.test(label(el)))?.getBoundingClientRect();
+  const idParam = level === "ads" ? "selected_ad_ids" : level === "adsets" ? "selected_adset_ids" : "selected_campaign_ids";
+  const texts: { x: number; y: number; text: string }[] = [];
+  const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+  let visited = 0;
+  while (walker.nextNode() && visited++ < 25000) {
+    const parent = walker.currentNode.parentElement;
+    if (!parent || !visible(parent) || parent.closest('button,[role="button"],input,textarea,script,style,[aria-hidden="true"]')) continue;
+    const text = walker.currentNode.textContent?.trim();
+    if (!text) continue;
+    const range = document.createRange(); range.selectNodeContents(walker.currentNode);
+    const rect = range.getBoundingClientRect();
+    if (rect.width && rect.height) texts.push({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, text: text.slice(0, 250) });
+  }
+  const links = [...scope.querySelectorAll<HTMLAnchorElement>('a[href]')].filter(visible);
+  const centers = rows.map((el) => { const r = el.getBoundingClientRect(); return r.top + r.height / 2; });
+  const identities = rows.map((el, i) => {
+    const center = centers[i], previous = centers[i - 1] ?? center - 60, next = centers[i + 1] ?? center + 60;
+    const low = (previous + center) / 2, high = (center + next) / 2;
+    const inBand = (band: DOMRect | undefined, x: number) => !!band && x >= band.left && x <= band.right;
+    const names = texts.filter((t) => t.y >= low && t.y < high && inBand(nameBand, t.x)).map((t) => t.text);
+    const ids = new Set(texts.filter((t) => t.y >= low && t.y < high && inBand(idBand, t.x) && /^\d+$/.test(t.text)).map((t) => t.text));
+    for (const link of links) {
+      const rect = link.getBoundingClientRect(), y = rect.top + rect.height / 2;
+      if (y < low || y >= high || !inBand(nameBand, rect.left + rect.width / 2)) continue;
+      const target = new URL(link.href, location.href), value = target.searchParams.get(idParam);
+      if (["adsmanager.facebook.com", "business.facebook.com"].includes(target.hostname) &&
+        (!target.searchParams.has("act") || target.searchParams.get("act") === account) && value && /^\d+$/.test(value)) ids.add(value);
+    }
+    return { id: ids.size === 1 ? [...ids][0] : null, name: names.join(" ") };
+  });
+  const samples = identities.map((r) => r.id && identities.filter((other) => other.id === r.id).length === 1
+    ? `id:${r.id}` : r.name ? `name:${r.name}` : "");
+  if (!samples.some(Boolean))
+    return unavailable("row_fingerprint_unavailable");
+  // Actual reporting-body offsets can verify a physical page with duplicate
+  // names. Metric text and arbitrary hit-test samples are deliberately absent.
+  const scrolls: number[] = [];
+  for (let a = rows[0].parentElement; a && a !== scope; a = a.parentElement) {
+    if (a.scrollHeight > a.clientHeight + 2 && !headers.some((h) => a!.contains(h)) &&
+      ["auto", "scroll", "hidden"].includes(getComputedStyle(a).overflowY)) scrolls.push(a.scrollTop);
+  }
+  let hash = 2166136261;
+  for (const c of JSON.stringify({ samples, scrolls })) hash = Math.imul(hash ^ c.charCodeAt(0), 16777619);
+  const first = rows[0].getBoundingClientRect(), last = rows.at(-1)!.getBoundingClientRect();
+  // The name cell may itself be an Edit button. Plan from visible column/row
+  // interiors and hit-test each candidate; never weaken the control exclusion
+  // just because the first point is blocked. At most 24 local observations.
+  type ColumnKind = "metric" | "identity" | "name" | "legacy";
+  const stickyColumn = (header: Element) => {
+    for (let a: Element | null = header; a && a !== scope; a = a.parentElement) {
+      const style = getComputedStyle(a);
+      if (style.position === "sticky" && (style.left !== "auto" || style.right !== "auto")) return true;
+    }
+    return false;
+  };
+  const columnBands = headers.filter((h) => !h.querySelector('input,[role="checkbox"],[role="switch"]') &&
+    !/^(?:on\s*\/\s*off|off\s*\/\s*on|ปิด\s*\/\s*เปิด|เปิด\s*\/\s*ปิด|select all|เลือกทั้งหมด)$/i.test(label(h)))
+    .map((h) => ({ rect: h.getBoundingClientRect(), sticky: stickyColumn(h), column_kind: (namePattern.test(label(h)) ? "name" : idPattern.test(label(h)) ? "identity" : "metric") as ColumnKind }))
+    .filter(({rect}) => Math.min(innerWidth - 2, rect.right) - Math.max(2, rect.left) > 12)
+    .sort((a,b) => a.rect.left - b.rect.left)
+    .filter((band,i,all)=>all.findIndex((other)=>Math.abs(other.rect.left-band.rect.left)<2 && Math.abs(other.rect.right-band.rect.right)<2)===i)
+    .map((band, band_index) => ({ ...band, band_index }))
+    .sort((a,b) => Number(a.sticky) - Number(b.sticky) ||
+      ({metric:0,identity:1,name:2,legacy:3}[a.column_kind] - {metric:0,identity:1,name:2,legacy:3}[b.column_kind]) ||
+      b.rect.left - a.rect.left);
+  const ys = [...new Set([centers[Math.floor(centers.length / 2)], centers[0], centers.at(-1)!])]
+    .filter((y) => y > bottom + 2 && y < innerHeight - 2);
+  const rejected: { tag: string; role: string; reason: string }[] = [];
+  let attempts = 0;
+  const targets: { x: number; y: number; column_kind: ColumnKind; band_index: number; body_offsets:{scroll_top:number;client_height:number;scroll_height:number}[] }[] = [];
+  for (const band of columnBands) {
+    if (targets.length >= 4 || attempts >= 24) break;
+    const left = Math.max(2, band.rect.left), right = Math.min(innerWidth - 2, band.rect.right);
+    const center = (left + right) / 2;
+    // Distinct columns are distinct wheel-routing opportunities. A frozen safe
+    // name pane is deliberately behind metric columns, rather than ending the
+    // plan after the first safe hit. Each attempt must re-probe this plan.
+    const xs = [center, (left + center) / 2];
+    let found = false;
+    for (const x of xs) {
+      for (const y of ys) {
+      if (attempts >= 24) break;
+      attempts++;
+      const hit = document.elementFromPoint(x, y);
+      const blocked = hit?.closest('[role="dialog"],input,textarea,select,button,[role="button"],a[href],[role="link"],[role="switch"],[role="checkbox"],[role="radio"],[contenteditable="true"]');
+      const reason = !hit ? "no_hit" : !scope.contains(hit) ? "outside_reporting_scope" : blocked ? "interactive_control" : null;
+      if (!reason) {
+        const body_offsets:{scroll_top:number;client_height:number;scroll_height:number}[]=[];
+        for(let a:Element|null=hit;a&&a!==scope;a=a.parentElement){
+          if(body_offsets.length>=6)break;
+          if(!headers.some(h=>a!.contains(h))&&a.scrollHeight>a.clientHeight+2&&
+            ["auto","scroll","hidden"].includes(getComputedStyle(a).overflowY))
+            body_offsets.push({scroll_top:a.scrollTop,client_height:a.clientHeight,scroll_height:a.scrollHeight});
+        }
+        targets.push({ x, y, column_kind: band.column_kind, band_index: band.band_index, body_offsets });
+        found = true;
+        break;
+      }
+      if (rejected.length < 8) {
+        const tag = (blocked ?? hit)?.tagName.toLowerCase() ?? "none";
+        const role = (blocked ?? hit)?.getAttribute("role") ?? "none";
+        rejected.push({
+          tag: /^(div|span|button|input|textarea|select|a|table|tr|td|th|section|main|body|html|none)$/.test(tag) ? tag : "other",
+          role: /^(button|link|checkbox|switch|radio|textbox|combobox|dialog|row|gridcell|cell|grid|table|none|presentation)$/.test(role) ? role : "other",
+          reason,
+        });
+      }
+      }
+      if (found || attempts >= 24) break;
+    }
+  }
+  const target_diagnostics = {
+    candidate_count: attempts, rejected, planned_targets: targets.length,
+    safe_bands: targets.map(({column_kind,band_index}) => ({column_kind,band_index})),
+  };
+  if (!targets.length) return { ...unavailable("reporting_target_occluded"), target_diagnostics };
+  return {
+    ready: true as const, signature: `${rows.length}:${hash >>> 0}`, rows: rows.length,
+    x: targets[0].x, y: targets[0].y, targets,
+    deltaY: Math.min(600, Math.max(40, last.top - first.top)), target_diagnostics,
+  };
 }

@@ -1,6 +1,14 @@
 # AI handoff และรูปแบบการพัฒนาระบบ
 
-เอกสารส่งต่องาน ณ 15 พฤศจิกายน 2026 อ้างอิง Extension 0.6.2 (อัปเดตจาก 0.5.0, 0.6.0 และ 0.6.1) ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+เอกสารส่งต่องาน ณ 16 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.5 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+
+0.6.5 แก้ pane selection ของการเลื่อน, horizontal header/body pairing, vertical row_alignment, parent IDs จากคอลัมน์, visible-only report controls/busy markers และปิดทางยก DOM ที่ไม่ยืนยัน scope ไปเป็น normalized data; เพิ่มการยืนยันว่าไม่มี Breakdown/ตัวกรองโดยผู้ใช้ในฟอร์มตรวจข้อมูลเดิม (default ไม่เลือก) ดู ANALYSIS.md และ VALIDATION.md ก่อนอ้างความพร้อม ต้องยืนยัน runtime/snapshot0.6.5 และผลจริงใหม่ เพราะผล live0.6.4 ด้านล่างยังเป็น failed acceptance ไม่ใช่หลักฐานว่ารุ่นใหม่ผ่าน
+
+Live 0.6.3 หลังผู้ใช้ Reload: inspect ผ่าน แต่ report.prepare ไม่ผ่าน required fields และ native paging ถูกปฏิเสธ `reporting_target_occluded`; ยังไม่รับรองว่าอ่านครบ รุ่น 0.6.4 แก้ตัวเลือกจุดเลื่อนและความถูกต้องของการค้นหา/จับคู่คอลัมน์ ต้องตรวจผลบน Meta หลัง Reload อีกครั้ง ดู VALIDATION.md สำหรับขอบเขตหลักฐาน
+
+Live 0.6.4 ล่าสุด: ยืนยันรุ่นและ report lease แล้ว ตัวเลือกจุดเมาส์ผ่าน guard แต่เลื่อนไม่เผยแถวใหม่ (`visible_rows_unchanged`) ทั้ง 3 ระดับ; Ads ยัง7แถวต่อภาพ/footer40 งานจบ needs_review ตั้งคอลัมน์ซ้ำยัง applied=false ขาด spend/link_clicks/messaging_conversations จึงยังไม่พร้อมประเมินรายแอดจาก DOM จริง การผ่าน fixture ไม่ได้ปิดสองปัญหานี้ ห้ามอ้าง live paging/setup สำเร็จหรือข้าม blockers; ใช้ validated CSV เมื่อต้องการข้อมูลวิเคราะห์ที่ตรวจเงื่อนไขได้
+
+Reliability รอบล่าสุด: อ่าน [ANALYSIS.md ส่วน 0.6.3](ANALYSIS.md#reliability-และการประเมินรายแอด-063) ก่อนแก้ตัววิเคราะห์/reader และอ่าน [ผลประเมินก่อนแก้](ASSESSMENT_2026-11-16.md) เพื่อทราบ regression ที่ต้องรักษา DOM ที่ไม่มี ID หรือบริบท Breakdown/ตัวกรองยังไม่ยืนยันต้องไม่สร้างยอดรวม อันดับ หรือ complete; เทียบชื่อ/ตำแหน่งเพื่อ join ไม่ได้ รายละเอียดเก่าในส่วน 7 เป็นประวัติ ต้องตรวจรุ่น Extension ที่เชื่อมจริงก่อนอ้าง live acceptance
 
 ## 1. เป้าหมายและขอบเขต
 

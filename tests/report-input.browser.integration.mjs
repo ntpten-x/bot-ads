@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 const bundle = await build({
   stdin: {
-    contents: `export {prepareReportWithInput} from './apps/extension/src/report-input.ts'; export {getReportFields} from './apps/extension/src/report-columns.ts';`,
+    contents: `export {prepareReportWithInput, scrollReportWithInput} from './apps/extension/src/report-input.ts'; export {getReportFields} from './apps/extension/src/report-columns.ts';`,
     resolveDir: process.cwd(),
   },
   bundle: true,
@@ -41,7 +41,7 @@ try {
   const fields = await worker.evaluate(() =>
     TrustedReportFixture.getReportFields("messages"),
   );
-  const fixture = `<!doctype html><style>label{display:block} #dialog{position:fixed;top:40px;left:40px;width:800px;height:800px;overflow:auto;background:white;z-index:10}input[type=checkbox]{width:20px;height:20px}li{height:26px;list-style:none}#search{width:400px;height:30px}</style>
+  let fixture = `<!doctype html><style>label{display:block} #dialog{position:fixed;top:40px;left:40px;width:800px;height:800px;overflow:auto;background:white;z-index:10}input[type=checkbox]{width:20px;height:20px}li{height:26px;list-style:none}#search{width:400px;height:30px}</style>
  <button id="publish" onclick="window.published=true">Publish</button><input id="adBudget" value="500">
  <button id="columns" onclick="if(event.isTrusted)document.querySelector('#custom').hidden=false">Columns: Performance</button>
  <button hidden id="custom" onclick="if(event.isTrusted)document.querySelector('#dialog').hidden=false">Customize columns</button>
@@ -54,7 +54,7 @@ try {
  const list=document.querySelector('#choices');list.replaceChildren();
  for(const field of window.available.filter(f=>query?f.labels[0].toLowerCase().includes(query.toLowerCase()):f.key!=='link_clicks')){
  const li=document.createElement('li'),input=document.createElement('input');input.type='checkbox';input.checked=window.selected.has(field.key);
- input.dataset.key=field.key;input.onchange=e=>{if(!e.isTrusted){input.checked=window.selected.has(field.key);window.untrustedEvents++;return;}window.trustedEvents++;if(input.checked)window.selected.add(field.key);else window.selected.delete(field.key);};
+ input.dataset.key=field.key;input.onchange=e=>{if(!e.isTrusted){input.checked=window.selected.has(field.key);window.untrustedEvents++;return;}window.trustedEvents++;if(input.checked)window.selected.add(field.key);else window.selected.delete(field.key);if(window.revokeOnChange&&field.key==='link_clicks')window.selected.delete('ad_id');};
  li.append(input,document.createTextNode(field.labels[0]));list.append(li);
  }}
  document.querySelector('#search').oninput=e=>{if(!e.isTrusted){window.untrustedEvents++;e.target.value='';return;}window.trustedEvents++;render(e.target.value)};render();
@@ -126,6 +126,140 @@ try {
     tabId,
   );
   expect(stillAttached).toBe(false);
+  // Native search can commit after a delayed controlled-input rerender. The
+  // previous query/results must not be accepted or overwritten in the meantime.
+  await meta.goto("https://adsmanager.facebook.com/adsmanager/manage/ads?act=123456789");
+  await meta.evaluate(() => {
+    window.available = window.available.filter(f => f.key !== 'account_id');
+    render();
+    const search = document.querySelector('#search');
+    // Meta's search aria name may remain English inside a Thai dialog.
+    search.setAttribute('aria-label', 'search columns');
+    document.querySelector('#title').textContent = 'ปรับแต่งคอลัมน์';
+    window.queries = [];
+    const defaultRender = render;
+    render = query => defaultRender(window.available.find(f => f.labels.includes(query))?.labels[0] ?? query);
+    search.oninput = e => {
+      if (!e.isTrusted) return;
+      window.queries.push(e.target.value);
+      const query = e.target.value;
+      e.target.value = '';
+      setTimeout(() => { search.value = query; render(query); }, 2600);
+    };
+  });
+  const delayed = await worker.evaluate((b) => TrustedReportFixture.prepareReportWithInput(b, "messages"), binding);
+  expect(delayed.ok, JSON.stringify(delayed)).toBe(true);
+  expect(delayed.selected).toContain('link_clicks');
+  expect(delayed.missing).toContain('account_id');
+  expect(delayed.missing_required).toEqual([]);
+  expect(delayed.applied).toBe(true);
+  expect(await meta.evaluate(() => window.queries[0])).toBe('การคลิกลิงก์');
+  // A distinct debounce shape: input commits immediately, results clear, and
+  // the actual matching choices arrive later without an aria-busy marker.
+  await meta.goto('https://adsmanager.facebook.com/adsmanager/manage/ads?act=123456789');
+  await meta.evaluate(() => {
+    document.querySelector('#search').oninput = e => {
+      if (!e.isTrusted) return;
+      const query = e.target.value;
+      document.querySelector('#choices').replaceChildren();
+      setTimeout(() => render(query), 2600);
+    };
+  });
+  const debounced = await worker.evaluate((b) => TrustedReportFixture.prepareReportWithInput(b, 'messages'), binding);
+  expect(debounced.ok, JSON.stringify(debounced)).toBe(true);
+  expect(debounced.selected).toContain('link_clicks');
+  expect(debounced.applied).toBe(true);
+  await meta.goto('https://adsmanager.facebook.com/adsmanager/manage/ads?act=999');
+  const wrongAccountUrl = await worker.evaluate((b) => TrustedReportFixture.prepareReportWithInput(b, 'messages'), binding);
+  expect(wrongAccountUrl.ok).toBe(false);
+  expect(wrongAccountUrl.error).toContain('Bound reporting tab');
+  expect(await meta.evaluate(() => !!window.applied)).toBe(false);
+  // A partially selectable report must stay open instead of saving a preset
+  // that lacks the stable identifier required by downstream analysis.
+  await meta.goto(
+    "https://adsmanager.facebook.com/adsmanager/manage/ads?act=123456789",
+  );
+  await meta.evaluate(() => {
+    window.available = window.available.filter((f) => f.key !== "ad_id");
+    render();
+  });
+  const partial = await worker.evaluate(
+    (b) => TrustedReportFixture.prepareReportWithInput(b, "messages"),
+    binding,
+  );
+  expect(partial.ok).toBe(false);
+  expect(partial.applied).toBe(false);
+  expect(partial.missing_required).toContain("ad_id");
+  expect(await meta.evaluate(() => !!window.applied)).toBe(false);
+  await meta.goto("https://adsmanager.facebook.com/adsmanager/manage/ads?act=123456789");
+  await meta.evaluate(() => { window.revokeOnChange = true; });
+  const reverted = await worker.evaluate((b) => TrustedReportFixture.prepareReportWithInput(b, "messages"), binding);
+  expect(reverted.ok).toBe(false);
+  expect(reverted.applied).toBe(false);
+  expect(reverted.missing_required).toContain("ad_id");
+  expect(await meta.evaluate(() => !!window.applied)).toBe(false);
+  // A custom virtualized body ignores synthetic wheel events. Only the existing
+  // local report lease permits the fixed native wheel transport.
+  fixture = `<div style="position:relative;width:900px;height:250px">
+    <div role="columnheader" style="position:absolute;left:0;top:0;width:80px;height:40px">On / Off</div>
+    <div role="columnheader" style="position:absolute;left:80px;top:0;width:420px;height:40px">Ad</div>
+    <div role="columnheader" style="position:absolute;left:500px;top:0;width:400px;height:40px">Results</div>
+    <div id="body" style="position:absolute;top:40px;left:0;width:900px;height:200px;overflow:hidden">
+    ${[0,1].map(i=>`<div role="switch" style="position:absolute;left:10px;top:${20+i*60}px;width:40px;height:25px"></div><a class="name" href="/adsmanager/manage/ads?act=123456789&selected_ad_ids=11${i}" style="position:absolute;left:90px;top:${20+i*60}px;width:410px;height:25px">Fixture ${i}</a><div class="metric" style="position:absolute;left:520px;top:${20+i*60}px;width:200px;height:25px">10</div>`).join('')}
+    </div></div><script>window.trustedWheels=0;document.querySelector('#body').addEventListener('wheel',e=>{if(!e.isTrusted)return;window.trustedWheels++;if(window.metricOnly){document.querySelectorAll('.metric').forEach(n=>n.textContent=String(Number(n.textContent)+1));return;}if(window.idsOnly){document.querySelectorAll('.name').forEach((n,i)=>n.href='/adsmanager/manage/ads?act=123456789&selected_ad_ids=22'+i);return;}document.querySelectorAll('.name').forEach((n,i)=>{n.textContent='Next '+i;n.href='/adsmanager/manage/ads?act=123456789&selected_ad_ids=33'+i;});});</script>`;
+  await meta.goto("https://adsmanager.facebook.com/adsmanager/manage/ads?act=123456789");
+  const pagingBinding = { ...binding, jobId: "report-paging-fixture" };
+  await worker.evaluate(async (b) => chrome.storage.local.set({
+    bridge: { tabId:b.tabId,account:b.account,enabled:true },
+    job: { id:b.jobId,tabId:b.tabId,account:b.account,status:"running" },
+  }),pagingBinding);
+  await worker.evaluate(() => chrome.storage.session.remove("reportInputLease"));
+  const noPagingLease = await worker.evaluate((b) => TrustedReportFixture.scrollReportWithInput(b), pagingBinding);
+  expect(noPagingLease.moved).toBe(false);
+  expect(noPagingLease.reason).toBe("report_input_lease_required");
+  expect(await meta.evaluate(() => window.trustedWheels)).toBe(0);
+  await worker.evaluate(async (b) => chrome.storage.session.set({ reportInputLease: { tabId:b.tabId, account:b.account, expires_at:Date.now()+900000 } }),binding);
+  const nativePaging = await worker.evaluate((b) => TrustedReportFixture.scrollReportWithInput(b), pagingBinding);
+  expect(nativePaging.moved, JSON.stringify(nativePaging)).toBe(true);
+  expect(nativePaging.method).toBe("native_wheel");
+  expect(await meta.evaluate(() => window.trustedWheels)).toBe(1);
+  expect(await worker.evaluate(async(id)=>chrome.debugger.sendCommand({tabId:id},"Input.dispatchMouseEvent",{type:"mouseMoved",x:1,y:1}).then(()=>true,()=>false),tabId)).toBe(false);
+  const noChange = await worker.evaluate((b) => TrustedReportFixture.scrollReportWithInput(b), pagingBinding);
+  expect(noChange.moved).toBe(false);
+  expect(noChange.reason).toBe("visible_rows_unchanged");
+  await meta.evaluate(() => {window.metricOnly=true;});
+  const metricRefresh = await worker.evaluate((b) => TrustedReportFixture.scrollReportWithInput(b), pagingBinding);
+  expect(metricRefresh.moved).toBe(false);
+  expect(metricRefresh.reason).toBe("visible_rows_unchanged");
+  await meta.evaluate(() => {window.metricOnly=false;window.idsOnly=true;document.querySelectorAll('.name').forEach(n=>n.textContent='Same name');});
+  const sameNamesNewIds = await worker.evaluate((b) => TrustedReportFixture.scrollReportWithInput(b), pagingBinding);
+  expect(sameNamesNewIds.moved).toBe(true);
+  // Pause or rebind after debugger attach but before the wheel: current local
+  // authority must win over the stale binding passed into the operation.
+  for (const race of ["pause", "rebind"]) {
+    const raced = await worker.evaluate(async ({b,race}) => {
+      const original = chrome.debugger.attach.bind(chrome.debugger);
+      chrome.debugger.attach = async (...args) => {
+        await original(...args);
+        if (race === "pause") {
+          const {job} = await chrome.storage.local.get("job");
+          await chrome.storage.local.set({job:{...job,status:"paused"}});
+        } else await chrome.storage.local.set({bridge:{tabId:b.tabId,account:"999",enabled:true}});
+      };
+      try { return await TrustedReportFixture.scrollReportWithInput(b); }
+      finally { chrome.debugger.attach = original; }
+    },{b:pagingBinding,race});
+    expect(raced.moved).toBe(false);
+    expect(raced.reason).toBe("collection_context_changed");
+    expect(await meta.evaluate(() => window.trustedWheels)).toBe(4);
+    await worker.evaluate(async(b)=>chrome.storage.local.set({bridge:{tabId:b.tabId,account:b.account,enabled:true},job:{id:b.jobId,tabId:b.tabId,account:b.account,status:"running"}}),pagingBinding);
+  }
+  // A modal must not receive the reporting wheel input.
+  await meta.evaluate(() => {const modal=document.createElement('div');modal.setAttribute('role','dialog');modal.style.cssText='position:fixed;inset:0;background:white';modal.textContent='Edit ad';document.body.append(modal);});
+  const blockedPaging = await worker.evaluate((b) => TrustedReportFixture.scrollReportWithInput(b), pagingBinding);
+  expect(blockedPaging.moved).toBe(false);
+  expect(blockedPaging.reason).toBe("reporting_view_blocked");
+  expect(await meta.evaluate(() => window.trustedWheels)).toBe(4);
   await worker.evaluate(
     async (b) =>
       chrome.storage.session.set({
@@ -142,6 +276,9 @@ try {
     binding,
   );
   expect(mismatch.ok).toBe(false);
+  const mismatchedPaging = await worker.evaluate((b) => TrustedReportFixture.scrollReportWithInput(b), pagingBinding);
+  expect(mismatchedPaging.moved).toBe(false);
+  expect(mismatchedPaging.reason).toBe("report_input_lease_required");
   await worker.evaluate(
     async (b) =>
       chrome.storage.session.set({
@@ -158,6 +295,9 @@ try {
     binding,
   );
   expect(expired.ok).toBe(false);
+  const expiredPaging = await worker.evaluate((b) => TrustedReportFixture.scrollReportWithInput(b), pagingBinding);
+  expect(expiredPaging.moved).toBe(false);
+  expect(expiredPaging.reason).toBe("report_input_lease_required");
   await worker.evaluate(
     async (b) =>
       chrome.storage.session.set({
@@ -178,8 +318,11 @@ try {
   );
   expect(editor.ok).toBe(false);
   expect(editor.error).toContain("Bound reporting tab");
+  const editorPaging = await worker.evaluate((b) => TrustedReportFixture.scrollReportWithInput(b), pagingBinding);
+  expect(editorPaging.moved).toBe(false);
+  expect(editorPaging.reason).toBe("reporting_context_changed");
   console.log(
-    "Trusted report input passed: actual MV3 debugger Input events, synthetic rejection, native search/checkbox/Save, exact account lease, no ad-budget/Publish mutations and detach",
+    "Trusted report input passed: actual MV3 debugger Input events, synthetic rejection, native search/checkbox/Save, missing/reverted required selection blocks Save, verified native wheel/no-change/modal guards, exact account lease, no ad-budget/Publish mutations and detach",
   );
 } finally {
   await context.close();

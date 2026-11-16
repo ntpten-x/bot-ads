@@ -51,6 +51,10 @@ try {
   const p = await api("/analysis/preview", { input, goal: "sales" });
   assert.equal(p.analysis.rows[0].derived.purchase_roas, 3);
   assert.equal(p.analysis.rows[0].derived.cost_per_conversion, 100);
+  assert.equal(p.analysis.rows[0].evaluation.status, "insufficient_sample");
+  assert.equal(p.analysis.rows[0].evaluation.comparison, null);
+  assert.equal(p.analysis.evaluation_policy.min_conversions, 5);
+  assert.ok(p.analysis.rows[0].evaluation.next_steps.length > 0);
   const bad = await api(
     "/analysis/preview",
     { input: { ...input, expected: { spend: 201 } }, goal: "sales" },

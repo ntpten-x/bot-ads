@@ -13,8 +13,18 @@ const statusNames: Record<string, string> = {
   rejected: "ปฏิเสธ",
 };
 const statusKind = (s: string) =>
-  s === "promoted" ? "success" : s === "rejected" ? "error" : s === "partially_promoted" ? "neutral" : "warning";
-const levelNames: Record<string, string> = { campaigns: "แคมเปญ", adsets: "ชุดโฆษณา", ads: "โฆษณา" };
+  s === "promoted"
+    ? "success"
+    : s === "rejected"
+      ? "error"
+      : s === "partially_promoted"
+        ? "neutral"
+        : "warning";
+const levelNames: Record<string, string> = {
+  campaigns: "แคมเปญ",
+  adsets: "ชุดโฆษณา",
+  ads: "โฆษณา",
+};
 export const reasonNames: Record<string, string> = {
   stable_id_unverified: "ไม่มี ID จากลิงก์หรือคอลัมน์ ID",
   duplicate_id_in_snapshot: "ID ซ้ำกันหลายแถว",
@@ -24,7 +34,14 @@ export const reasonNames: Record<string, string> = {
   parent_ad_set_not_promoted: "ชุดโฆษณาแม่ยังไม่ถูกบันทึก",
   parent_relationship_conflict: "ความสัมพันธ์แม่-ลูกขัดกับข้อมูลเดิม",
   column_mapping_unverified: "ยืนยันการจับคู่คอลัมน์ไม่ได้",
+  identity_source_unverified: "ยืนยันแหล่ง ID ไม่ได้",
+  breakdown_unverified: "ยังไม่ยืนยันการแจกแจงข้อมูล",
+  breakdown_conflict: "ค่าการแจกแจงข้อมูลขัดแย้งกัน",
+  filters_unverified: "ยังไม่ยืนยันตัวกรองรายงาน",
+  filters_not_supported: "รายงานมีตัวกรองที่ยังยกเป็นข้อมูลวิเคราะห์ไม่ได้",
   header_body_scroll_mismatch: "หัวตารางกับแถวเลื่อนไม่ตรงกัน",
+  identity_metric_vertical_mismatch: "แถว ID กับตัวเลขเลื่อนแนวตั้งไม่ตรงกัน",
+  row_alignment_unverified: "ยังยืนยันแนวแถว ID กับตัวเลขไม่ได้",
   date_range_unverified: "ไม่พบวันที่ชัดเจน",
   currency_unverified: "ยืนยันสกุลเงินไม่ได้",
   currency_conflict: "สกุลเงินในเซลล์ขัดกัน",
@@ -56,31 +73,62 @@ export default function CapturesView({
   notify: (message: string, error?: boolean) => void;
 }) {
   const [status, setStatus] = useState("");
-  const [selected, setSelected] = useState("");
+  const [selection, setSelection] = useState({ account, id: "" });
+  const selected = selection.account === account ? selection.id : "";
   const [timezone, setTimezone] = useState("");
   const [attribution, setAttribution] = useState("");
+  const [noBreakdown, setNoBreakdown] = useState(false);
+  const [noFilters, setNoFilters] = useState(false);
+  const chooseCapture = (id: string) => {
+    setSelection({ account, id });
+    setTimezone("");
+    setAttribution("");
+    setNoBreakdown(false);
+    setNoFilters(false);
+  };
   const list = useSWR<CaptureSummary[]>(
-    account ? `/captures?account_id=${account}${status ? `&status=${status}` : ""}` : null,
+    account
+      ? `/captures?account_id=${account}${status ? `&status=${status}` : ""}`
+      : null,
     api,
     { refreshInterval: 30000 },
   );
-  const detail = useSWR<CaptureDetail>(selected ? `/captures/${selected}` : null, api);
+  const detail = useSWR<CaptureDetail>(
+    selected ? `/captures/${selected}` : null,
+    api,
+  );
   const rows = list.data ?? [];
   return (
     <div className="captures-grid">
+      <Note>
+        เริ่มจากเมนูข้อมูลวิเคราะห์: ตั้งคอลัมน์ ID แคมเปญ/ชุดโฆษณา/แอด ยอดใช้จ่าย
+        และตัวเลขตามเป้าหมาย แล้วอ่านตาราง หากต้องใช้เมาส์เลื่อนรายงานจริง
+        ให้เปิดสิทธิ์รายงานจาก popup ของ Extension ก่อน เมื่อมีข้อมูลขาดหรือยืนยันตัวกรองไม่ได้
+        ให้นำเข้า CSV ระดับ Ads และตรวจจำนวนแถวกับยอดรวมต้นทาง
+        แอดที่ขึ้นข้อผิดพลาดการชำระเงินควรตรวจใน Meta ก่อนประเมินการนำส่ง
+      </Note>
       <CaptureAnalysisPanel account={account} api={api} run={run} />
       <Panel
         title="ข้อมูลดิบจาก Extension"
         subtitle="ทุกครั้งที่ Extension อ่านตาราง ระบบบันทึกลง PostgreSQL อัตโนมัติ แถวที่ยืนยัน ID วันที่ สกุลเงิน เขตเวลา Attribution และคอลัมน์ครบเท่านั้นที่ถูกยกขึ้นเป็นข้อมูลวิเคราะห์"
         action={
-          <button className="text-button" onClick={() => void run("captures", async () => void (await list.mutate()))}>
+          <button
+            className="text-button"
+            onClick={() =>
+              void run("captures", async () => void (await list.mutate()))
+            }
+          >
             รีเฟรช
           </button>
         }
       >
         <div className="history-filter">
           <label htmlFor="captureFilter">สถานะ</label>
-          <select id="captureFilter" value={status} onChange={(e) => setStatus(e.target.value)}>
+          <select
+            id="captureFilter"
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+          >
             <option value="">ทั้งหมด</option>
             {Object.entries(statusNames).map(([k, v]) => (
               <option key={k} value={k}>
@@ -106,7 +154,10 @@ export default function CapturesView({
             <tbody>
               {rows.length ? (
                 rows.map((c) => (
-                  <tr key={c.id} className={c.id === selected ? "selected" : undefined}>
+                  <tr
+                    key={c.id}
+                    className={c.id === selected ? "selected" : undefined}
+                  >
                     <td>
                       <strong>{levelNames[c.level ?? ""] ?? c.page}</strong>
                       <small>
@@ -118,11 +169,18 @@ export default function CapturesView({
                     <td>{c.rows_with_id}</td>
                     <td>{c.promoted_rows}</td>
                     <td>
-                      <Pill kind={statusKind(c.review_status)}>{statusNames[c.review_status] ?? c.review_status}</Pill>
+                      <Pill kind={statusKind(c.review_status)}>
+                        {statusNames[c.review_status] ?? c.review_status}
+                      </Pill>
                     </td>
-                    <td className="small">{c.review_reasons.slice(0, 3).map(reasonText).join(", ")}</td>
+                    <td className="small">
+                      {c.review_reasons.slice(0, 3).map(reasonText).join(", ")}
+                    </td>
                     <td>
-                      <button className="text-button" onClick={() => setSelected(c.id)}>
+                      <button
+                        className="text-button"
+                        onClick={() => chooseCapture(c.id)}
+                      >
                         ดูแถว
                       </button>
                     </td>
@@ -130,14 +188,18 @@ export default function CapturesView({
                 ))
               ) : (
                 <EmptyRow cols={8}>
-                  {account ? (list.isLoading ? "กำลังโหลด…" : "ยังไม่มีข้อมูลที่ Extension อ่าน") : "เลือกบัญชีโฆษณาก่อน"}
+                  {account
+                    ? list.isLoading
+                      ? "กำลังโหลด…"
+                      : "ยังไม่มีข้อมูลที่ Extension อ่าน"
+                    : "เลือกบัญชีโฆษณาก่อน"}
                 </EmptyRow>
               )}
             </tbody>
           </table>
         </div>
       </Panel>
-      {detail.data ? (
+      {selected && detail.data ? (
         <Panel
           title={`แถวที่อ่านได้ · ${levelNames[detail.data.level ?? ""] ?? detail.data.page}`}
           subtitle={`ช่วงวันที่: ${detail.data.reporting_context?.date_range_label ?? "ไม่ทราบ"} · สกุลเงิน: ${detail.data.reporting_context?.currency ?? "unverified"} · เขตเวลา: ${detail.data.reporting_context?.timezone ?? "unverified"} · การจัดแนวคอลัมน์: ${detail.data.column_alignment ?? "?"}`}
@@ -163,11 +225,19 @@ export default function CapturesView({
                       <small>{r.identity_source ?? "ไม่ยืนยัน"}</small>
                     </td>
                     <td>{r.name ?? "—"}</td>
-                    <td className="small">{r.cells.map((c) => `${c.header}: ${c.text.split("\n")[0]}`).join(" · ")}</td>
-                    <td>
-                      <Pill kind={statusKind(r.review_status)}>{statusNames[r.review_status] ?? r.review_status}</Pill>
+                    <td className="small">
+                      {r.cells
+                        .map((c) => `${c.header}: ${c.text.split("\n")[0]}`)
+                        .join(" · ")}
                     </td>
-                    <td className="small">{r.review_reasons.map(reasonText).join(", ") || "—"}</td>
+                    <td>
+                      <Pill kind={statusKind(r.review_status)}>
+                        {statusNames[r.review_status] ?? r.review_status}
+                      </Pill>
+                    </td>
+                    <td className="small">
+                      {r.review_reasons.map(reasonText).join(", ") || "—"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -175,12 +245,46 @@ export default function CapturesView({
           </div>
           <div className="panel-form">
             <Note>
-              ยืนยันเขตเวลาและ Attribution จากหน้าตั้งค่าบัญชีโฆษณาได้เหมือนการนำเข้า CSV ส่วน ID วันที่ และสกุลเงินต้องมาจากหน้า Meta เท่านั้น
+              ยืนยันเขตเวลาและ Attribution จากหน้าตั้งค่าบัญชีโฆษณาได้เหมือนการนำเข้า CSV
+              ส่วน ID วันที่ และสกุลเงินต้องมาจากหน้า Meta เท่านั้น
+              ผลที่ผ่านการตรวจจะดูได้ในเมนูข้อมูลวิเคราะห์ ส่วนแผงข้อมูลดิบด้านบนยังคงหลักฐานที่อ่านได้เดิม
             </Note>
-            <label htmlFor="captureTimezone">เขตเวลา (IANA เช่น Asia/Bangkok)</label>
-            <input id="captureTimezone" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+            <label htmlFor="captureTimezone">
+              เขตเวลา (IANA เช่น Asia/Bangkok)
+            </label>
+            <input
+              id="captureTimezone"
+              value={timezone}
+              onChange={(e) => setTimezone(e.target.value)}
+            />
             <label htmlFor="captureAttribution">Attribution</label>
-            <input id="captureAttribution" value={attribution} onChange={(e) => setAttribution(e.target.value)} />
+            <input
+              id="captureAttribution"
+              value={attribution}
+              onChange={(e) => setAttribution(e.target.value)}
+            />
+            <Note>
+              หากหน้า Meta ไม่แสดงเงื่อนไขนี้
+              ยืนยันได้เฉพาะเมื่อคุณตรวจรายงานต้นทางแล้วว่าไม่มีการแจกแจงข้อมูลและไม่มีตัวกรอง
+              การยืนยันจะบันทึกกับประวัติการตรวจ ไม่แทน ID วันที่ สกุลเงิน หรือข้อมูลที่ขาด
+              และไม่เปลี่ยนโฆษณา
+            </Note>
+            <label className="checkbox-line">
+              <input
+                type="checkbox"
+                checked={noBreakdown}
+                onChange={(e) => setNoBreakdown(e.target.checked)}
+              />
+              ยืนยันว่าไม่มีการแจกแจงข้อมูล (Breakdown)
+            </label>
+            <label className="checkbox-line">
+              <input
+                type="checkbox"
+                checked={noFilters}
+                onChange={(e) => setNoFilters(e.target.checked)}
+              />
+              ยืนยันว่าไม่มีตัวกรองรายงาน
+            </label>
             <button
               className="primary"
               disabled={busy}
@@ -188,13 +292,23 @@ export default function CapturesView({
                 void run("review", async () => {
                   const context = {
                     ...(timezone.trim() ? { timezone: timezone.trim() } : {}),
-                    ...(attribution.trim() ? { attribution: attribution.trim() } : {}),
+                    ...(attribution.trim()
+                      ? { attribution: attribution.trim() }
+                      : {}),
+                    ...(noBreakdown ? { confirm_no_breakdown: true } : {}),
+                    ...(noFilters ? { confirm_no_filters: true } : {}),
                   };
-                  const r = await api<{ status: string; promoted: number; rows: number }>(
+                  const r = await api<{
+                    status: string;
+                    promoted: number;
+                    rows: number;
+                  }>(
                     `/captures/${selected}/review`,
                     Object.keys(context).length ? { context } : {},
                   );
-                  notify(`ตรวจซ้ำแล้ว: ยกขึ้น ${r.promoted}/${r.rows} แถว (${statusNames[r.status] ?? r.status})`);
+                  notify(
+                    `ตรวจซ้ำแล้ว: ยกขึ้น ${r.promoted}/${r.rows} แถว (${statusNames[r.status] ?? r.status})`,
+                  );
                   await Promise.all([detail.mutate(), list.mutate()]);
                 })
               }

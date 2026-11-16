@@ -31,17 +31,33 @@ export async function prepareReportColumns(options: {
           "Reporting page or account changed; column setup stopped",
         );
     };
-    const visible = (el: Element) => {
-      const r = el.getBoundingClientRect(),
-        s = getComputedStyle(el);
-      return (
-        r.width > 0 &&
-        r.height > 0 &&
-        r.bottom > 0 &&
-        r.top < innerHeight &&
-        s.display !== "none" &&
-        s.visibility !== "hidden"
-      );
+    const geometry = (el: Element) => {
+      const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+      let left = Math.max(0, r.left), right = Math.min(innerWidth, r.right);
+      let top = Math.max(0, r.top), bottom = Math.min(innerHeight, r.bottom);
+      let hidden = s.display === "none" || s.visibility === "hidden";
+      for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+        const ps = getComputedStyle(parent), pr = parent.getBoundingClientRect();
+        if (ps.display === "none" || ps.visibility === "hidden" || parent.getAttribute("aria-hidden") === "true") hidden = true;
+        if (/^(hidden|clip|scroll|auto)$/.test(ps.overflowX)) {
+          left = Math.max(left, pr.left + parent.clientLeft);
+          right = Math.min(right, pr.left + parent.clientLeft + parent.clientWidth);
+        }
+        if (/^(hidden|clip|scroll|auto)$/.test(ps.overflowY)) {
+          top = Math.max(top, pr.top + parent.clientTop);
+          bottom = Math.min(bottom, pr.top + parent.clientTop + parent.clientHeight);
+        }
+      }
+      return { visible: !hidden && r.width > 0 && r.height > 0 && right > left && bottom > top,
+        x: (left + right) / 2, y: (top + bottom) / 2 };
+    };
+    const visible = (el: Element) => geometry(el).visible;
+    const reachable = (el: HTMLElement) => {
+      const g = geometry(el);
+      if (!g.visible) return false;
+      const hit = document.elementFromPoint(g.x, g.y), item = el.closest('li,[role="listitem"]');
+      return !!hit && (el === hit || el.contains(hit) || !!item && item.contains(hit) &&
+        item.querySelectorAll('input[type="checkbox"],[role="checkbox"]').length === 1);
     };
     const text = (el: Element) =>
       (
@@ -229,6 +245,7 @@ export async function prepareReportColumns(options: {
         continue;
       }
       const checkbox = found[0];
+      if (!reachable(checkbox)) { missing.push(field.key); continue; }
       const checked =
         checkbox instanceof HTMLInputElement
           ? checkbox.checked
@@ -246,7 +263,7 @@ export async function prepareReportColumns(options: {
       }
       const after = matches();
       if (
-        after.length === 1 &&
+        after.length === 1 && reachable(after[0]) &&
         (after[0] instanceof HTMLInputElement
           ? after[0].checked
           : after[0].getAttribute("aria-checked") === "true")
@@ -254,10 +271,40 @@ export async function prepareReportColumns(options: {
         selected.push(field.key);
       else missing.push(field.key);
     }
-    if (!selected.length)
+    // Re-observe required checkboxes after all selection/search rerenders.
+    // A field that was selected earlier may have been reverted by the UI.
+    for (const field of fields.filter((f) => f.required && selected.includes(f.key))) {
+      const matching = () => [...(getDialog()?.querySelectorAll<HTMLElement>(
+        'input[type="checkbox"],[role="checkbox"]',
+      ) ?? [])].filter((el) => visible(el) && field.labels.some(
+        (l) => label(el).replace(/\s+/g, " ").toLowerCase() === l.toLowerCase(),
+      ));
+      let found = matching();
+      if (!found.length) {
+        const searches = [...(getDialog()?.querySelectorAll<HTMLInputElement>("input") ?? [])]
+          .filter((el) => visible(el) && ["text", "search"].includes(el.type) && /search|ค้นหา/i.test(el.placeholder + " " + label(el)));
+        if (searches.length === 1) for (const query of [...new Set([
+          field.labels[0], field.labels.find((l) => /[ก-๙]/.test(l)),
+        ].filter((s): s is string => !!s))]) {
+          guard();
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(searches[0], query);
+          searches[0].dispatchEvent(new Event("input", { bubbles: true }));
+          searches[0].dispatchEvent(new Event("change", { bubbles: true }));
+          await wait(() => matching().length > 0, 450);
+          found = matching();
+          if (found.length) break;
+        }
+      }
+      if (found.length !== 1 || !reachable(found[0]) || !(found[0] instanceof HTMLInputElement
+        ? found[0].checked : found[0].getAttribute("aria-checked") === "true")) {
+        selected.splice(selected.indexOf(field.key), 1);
+        if (!missing.includes(field.key)) missing.push(field.key);
+      }
+    }
+    if (!selected.length || fields.some((f) => f.required && !selected.includes(f.key)))
       return {
         ok: false as const,
-        error: "ยังยืนยันการเลือกคอลัมน์ไม่ได้ จึงไม่บันทึกมุมมองรายงาน",
+        error: "คอลัมน์จำเป็นยังเลือกไม่ครบหรือยืนยันสถานะไม่ได้ จึงไม่บันทึกมุมมองรายงาน",
         goal: options.goal,
         selected,
         missing,
@@ -267,7 +314,7 @@ export async function prepareReportColumns(options: {
         applied: false,
         diagnostics,
         warning:
-          "No verified field selection; report preferences were not saved.",
+          "Required selections are incomplete; report preferences were not saved.",
       };
     const dialog = getDialog();
     if (!dialog) throw new Error("หน้าตั้งคอลัมน์ปิดก่อนตรวจผล");
@@ -314,9 +361,11 @@ export type ReportField = { key: string; labels: string[]; required: boolean };
 export function getReportFields(goal: "messages" | "sales" | "leads") {
   const fields: ReportField[] = [
     {
+      // The account is verified from the bound reporting URL on every input.
+      // Meta does not offer this optional display column in every layout.
       key: "account_id",
       labels: ["Account ID", "ID บัญชีโฆษณา", "รหัสบัญชีโฆษณา"],
-      required: true,
+      required: false,
     },
     {
       key: "campaign_name",

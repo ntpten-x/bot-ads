@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { buildAnalysis } from "../packages/core/src/analysis.js";
 import {
   captureLevel,
   evaluateSnapshot,
   parseDateRangeLabel,
   parseDisplayNumber,
   snapshotFingerprint,
+  operatorContextSchema,
   type DomSnapshot,
 } from "../packages/core/src/dom-capture.js";
 
@@ -41,6 +43,8 @@ const snapshot = (over: Partial<DomSnapshot> = {}): DomSnapshot => ({
     attribution: "unverified",
     timezone: "Asia/Bangkok",
     currency: "THB",
+    breakdown: {},
+    filters: [],
   },
   row_observations: [row()],
   ...over,
@@ -48,10 +52,13 @@ const snapshot = (over: Partial<DomSnapshot> = {}): DomSnapshot => ({
 const options = { bound_account: account };
 
 test("date range labels from Thai and English date buttons", () => {
-  assert.deepEqual(parseDateRangeLabel("30 วันที่ผ่านมา: 16 ต.ค. 2026 – 14 พ.ย. 2026"), {
-    date_start: "2026-10-16",
-    date_end: "2026-11-14",
-  });
+  assert.deepEqual(
+    parseDateRangeLabel("30 วันที่ผ่านมา: 16 ต.ค. 2026 – 14 พ.ย. 2026"),
+    {
+      date_start: "2026-10-16",
+      date_end: "2026-11-14",
+    },
+  );
   assert.deepEqual(parseDateRangeLabel("30 วันที่ผ่านมา: 16 ต.ค. – 14 พ.ย. 2569"), {
     date_start: "2026-10-16",
     date_end: "2026-11-14",
@@ -60,17 +67,24 @@ test("date range labels from Thai and English date buttons", () => {
     date_start: "2026-11-08",
     date_end: "2026-11-14",
   });
-  assert.deepEqual(parseDateRangeLabel("Last 30 days: Oct 16, 2026 – Nov 14, 2026"), {
-    date_start: "2026-10-16",
-    date_end: "2026-11-14",
-  });
+  assert.deepEqual(
+    parseDateRangeLabel("Last 30 days: Oct 16, 2026 – Nov 14, 2026"),
+    {
+      date_start: "2026-10-16",
+      date_end: "2026-11-14",
+    },
+  );
   assert.equal(parseDateRangeLabel("วันนี้"), null);
   assert.equal(parseDateRangeLabel(null), null);
   assert.equal(parseDateRangeLabel("31 ก.พ. 2026 – 1 มี.ค. 2026"), null);
 });
 
 test("display numbers never turn unknown into zero", () => {
-  assert.deepEqual(parseDisplayNumber("฿1,234.50"), { value: 1234.5, symbol: "฿", percent: false });
+  assert.deepEqual(parseDisplayNumber("฿1,234.50"), {
+    value: 1234.5,
+    symbol: "฿",
+    percent: false,
+  });
   assert.equal(parseDisplayNumber("—"), null);
   assert.equal(parseDisplayNumber("การใช้งบประมาณชุดโฆษณา"), null);
   assert.equal(parseDisplayNumber("16\nการส่งข้อความ")?.value, 16);
@@ -89,7 +103,11 @@ test("fully verified campaign row is promoted with verified conditions", () => {
   assert.equal(r.record?.attribution, "คลิก 7 วัน หรือดู 1 วัน");
   assert.equal(r.record?.currency, "THB");
   assert.equal(r.record?.date_start, "2026-10-16");
-  assert.equal(r.record?.metrics?.budget, undefined, "non-numeric budget stays missing");
+  assert.equal(
+    r.record?.metrics?.budget,
+    undefined,
+    "non-numeric budget stays missing",
+  );
   assert.equal(r.record?.raw._source, "dom_capture");
 });
 
@@ -130,13 +148,35 @@ test("rows without stable ID, verified context or mapping stay needs_review with
 
 test("operator may confirm timezone and attribution but never IDs, dates or currency", () => {
   const s = snapshot({
-    reporting_context: { date_range_label: "วันนี้", currency: "unverified", timezone: "unverified" },
-    row_observations: [row({ cells: row().cells.filter((c) => c.header !== "การตั้งค่าการระบุที่มา") })],
+    reporting_context: {
+      date_range_label: "วันนี้",
+      currency: "unverified",
+      timezone: "unverified",
+      breakdown: {},
+      filters: [],
+    },
+    row_observations: [
+      row({
+        cells: row().cells.filter((c) => c.header !== "การตั้งค่าการระบุที่มา"),
+      }),
+    ],
   });
-  const [r] = evaluateSnapshot(s, { ...options, operator: { timezone: "Asia/Bangkok", attribution: "7-day click" } });
-  assert.deepEqual(r.reasons.sort(), ["currency_unverified", "date_range_unverified"]);
+  const [r] = evaluateSnapshot(s, {
+    ...options,
+    operator: { timezone: "Asia/Bangkok", attribution: "7-day click" },
+  });
+  assert.deepEqual(r.reasons.sort(), [
+    "currency_unverified",
+    "date_range_unverified",
+  ]);
   const ok = evaluateSnapshot(
-    snapshot({ row_observations: [row({ cells: row().cells.filter((c) => c.header !== "การตั้งค่าการระบุที่มา") })] }),
+    snapshot({
+      row_observations: [
+        row({
+          cells: row().cells.filter((c) => c.header !== "การตั้งค่าการระบุที่มา"),
+        }),
+      ],
+    }),
     { ...options, operator: { attribution: "7-day click" } },
   );
   assert.equal(ok[0].status, "ready");
@@ -144,41 +184,306 @@ test("operator may confirm timezone and attribution but never IDs, dates or curr
 });
 
 test("scroll mismatch, currency conflict, duplicate IDs and account mismatch block promotion", () => {
-  assert.ok(evaluateSnapshot(snapshot({ column_alignment: "mismatch" }), options)[0].reasons.includes("header_body_scroll_mismatch"));
+  assert.ok(
+    evaluateSnapshot(
+      snapshot({ column_alignment: "mismatch" }),
+      options,
+    )[0].reasons.includes("header_body_scroll_mismatch"),
+  );
   const dollars = snapshot({
-    row_observations: [row({ cells: row().cells.map((c) => (c.header === "จำนวนเงินที่ใช้จ่ายไป" ? { ...c, text: "$10.00" } : c)) })],
+    row_observations: [
+      row({
+        cells: row().cells.map((c) =>
+          c.header === "จำนวนเงินที่ใช้จ่ายไป" ? { ...c, text: "$10.00" } : c,
+        ),
+      }),
+    ],
   });
-  assert.ok(evaluateSnapshot(dollars, options)[0].reasons.includes("currency_conflict"));
-  const dup = evaluateSnapshot(snapshot({ row_observations: [row(), row({ name: "Other" })] }), options);
-  assert.ok(dup.every((r) => r.status === "needs_review" && r.reasons.includes("duplicate_id_in_snapshot")));
-  assert.equal(evaluateSnapshot(snapshot({ account_id: "999" }), options)[0].status, "rejected");
+  assert.ok(
+    evaluateSnapshot(dollars, options)[0].reasons.includes("currency_conflict"),
+  );
+  const dup = evaluateSnapshot(
+    snapshot({ row_observations: [row(), row({ name: "Other" })] }),
+    options,
+  );
+  assert.ok(
+    dup.every(
+      (r) =>
+        r.status === "needs_review" &&
+        r.reasons.includes("duplicate_id_in_snapshot"),
+    ),
+  );
+  assert.equal(
+    evaluateSnapshot(snapshot({ account_id: "999" }), options)[0].status,
+    "rejected",
+  );
 });
 
 test("child levels need DOM parent IDs and a promoted parent campaign", () => {
   const adset = snapshot({
     page: "/adsmanager/manage/adsets",
-    row_observations: [row({ identity: "222", cells: row().cells.map((c) => (c.header === "แคมเปญ" ? { header: "ชุดโฆษณา", text: "Fixture ad set" } : c)) })],
+    row_observations: [
+      row({
+        identity: "222",
+        cells: row().cells.map((c) =>
+          c.header === "แคมเปญ"
+            ? { header: "ชุดโฆษณา", text: "Fixture ad set" }
+            : c,
+        ),
+      }),
+    ],
   });
-  assert.ok(evaluateSnapshot(adset, options)[0].reasons.includes("parent_campaign_id_unverified"));
+  assert.ok(
+    evaluateSnapshot(adset, options)[0].reasons.includes(
+      "parent_campaign_id_unverified",
+    ),
+  );
   adset.row_observations[0].parent_ids = { campaign_id: "111" };
-  assert.ok(evaluateSnapshot(adset, options)[0].reasons.includes("parent_campaign_not_promoted"));
-  const ready = evaluateSnapshot(adset, { ...options, campaign_names: new Map([["111", "Fixture campaign"]]) })[0];
+  assert.ok(
+    evaluateSnapshot(adset, options)[0].reasons.includes(
+      "parent_campaign_not_promoted",
+    ),
+  );
+  const ready = evaluateSnapshot(adset, {
+    ...options,
+    campaign_names: new Map([["111", "Fixture campaign"]]),
+  })[0];
   assert.equal(ready.status, "ready", ready.reasons.join(","));
   assert.equal(ready.record?.ad_set_id, "222");
   assert.equal(ready.record?.level, "adset");
   const ad = snapshot({
     page: "/adsmanager/manage/ads",
-    row_observations: [row({ identity: "333", parent_ids: { campaign_id: "111" }, cells: row().cells.map((c) => (c.header === "แคมเปญ" ? { header: "โฆษณา", text: "Fixture ad" } : c)) })],
+    row_observations: [
+      row({
+        identity: "333",
+        parent_ids: { campaign_id: "111" },
+        cells: row().cells.map((c) =>
+          c.header === "แคมเปญ" ? { header: "โฆษณา", text: "Fixture ad" } : c,
+        ),
+      }),
+    ],
   });
-  const adEval = evaluateSnapshot(ad, { ...options, campaign_names: new Map([["111", "Fixture campaign"]]) })[0];
+  const adEval = evaluateSnapshot(ad, {
+    ...options,
+    campaign_names: new Map([["111", "Fixture campaign"]]),
+  })[0];
   assert.ok(adEval.reasons.includes("parent_ad_set_id_unverified"));
   ad.row_observations[0].parent_ids = { campaign_id: "111", ad_set_id: "222" };
-  const adReady = evaluateSnapshot(ad, { ...options, campaign_names: new Map([["111", "Fixture campaign"]]) })[0];
+  const adReady = evaluateSnapshot(ad, {
+    ...options,
+    campaign_names: new Map([["111", "Fixture campaign"]]),
+  })[0];
   assert.equal(adReady.status, "ready", adReady.reasons.join(","));
   assert.equal(adReady.record?.ad_id, "333");
 });
 
 test("snapshot fingerprint is stable for identical captures", () => {
-  assert.equal(snapshotFingerprint(snapshot()), snapshotFingerprint(snapshot()));
-  assert.notEqual(snapshotFingerprint(snapshot()), snapshotFingerprint(snapshot({ captured_at: "2026-11-15T07:00:01.000Z" })));
+  assert.equal(
+    snapshotFingerprint(snapshot()),
+    snapshotFingerprint(snapshot()),
+  );
+  assert.notEqual(
+    snapshotFingerprint(snapshot()),
+    snapshotFingerprint(snapshot({ captured_at: "2026-11-15T07:00:01.000Z" })),
+  );
+});
+
+test("missing DOM scope cannot bypass capture guards through promotion into normalized analysis", () => {
+  const s = snapshot({
+    page: "/adsmanager/manage/ads",
+    row_observations: ["331", "332", "333"].map((id) =>
+      row({
+        identity: id,
+        method: "semantic",
+        column_mapping: "semantic",
+        parent_ids: { campaign_id: "111", ad_set_id: "222" },
+        cells: [
+          { header: "Ad", text: "Synthetic ad" },
+          { header: "Results", text: "10\nMessages" },
+          { header: "Amount spent", text: "100" },
+          { header: "Impressions", text: "1000" },
+          { header: "Link clicks", text: "100" },
+          { header: "Messaging conversations started", text: "10" },
+        ],
+      }),
+    ),
+  });
+  s.reporting_context!.attribution = "7-day click";
+  delete s.reporting_context!.breakdown;
+  delete s.reporting_context!.filters;
+  const evaluated = evaluateSnapshot(s, {
+    ...options,
+    campaign_names: new Map([["111", "Fixture campaign"]]),
+  });
+  assert.ok(
+    evaluated.every((r) => r.status === "needs_review" && r.record === null),
+  );
+  assert.ok(
+    evaluated.every(
+      (r) =>
+        r.reasons.includes("breakdown_unverified") &&
+        r.reasons.includes("filters_unverified"),
+    ),
+  );
+  const report = buildAnalysis(
+    evaluated.flatMap((r) => (r.record ? [r.record] : [])),
+  );
+  assert.equal(report.summary.ready_rows, 0);
+  assert.equal(report.rows.length, 0);
+});
+
+test("promotion requires explicit empty filters and preserves confirmed breakdown dimensions and scope metadata", () => {
+  const s = snapshot();
+  s.reporting_context!.breakdown = {};
+  s.row_observations[0].cells.push({ header: "Age", text: "25-34" });
+  const [ok] = evaluateSnapshot(s, options);
+  assert.equal(ok.status, "ready", ok.reasons.join(","));
+  assert.deepEqual(ok.record!.breakdown, { age: "25-34" });
+  assert.equal(ok.record!.raw._dom_scope_version, "1");
+  assert.equal(ok.record!.raw._dom_scope_filters, "[]");
+  assert.equal(ok.record!.raw._dom_scope_breakdown, '{"age":"25-34"}');
+  assert.equal(ok.record!.raw._dom_identity_source, "row_link_href");
+  s.reporting_context!.filters = [{ status: "active" }];
+  assert.ok(
+    evaluateSnapshot(s, options)[0].reasons.includes("filters_not_supported"),
+  );
+  s.reporting_context!.filters = "unverified";
+  assert.ok(
+    evaluateSnapshot(s, options)[0].reasons.includes("filters_unverified"),
+  );
+  s.reporting_context!.filters = {};
+  s.reporting_context!.breakdown = { age: "35-44" };
+  assert.ok(
+    evaluateSnapshot(s, options)[0].reasons.includes("breakdown_conflict"),
+  );
+});
+
+test("promotion refuses unknown identity provenance and verifies visible ID columns", () => {
+  const invalid = snapshot({
+    row_observations: [row({ identity_source: "name" })],
+  });
+  assert.ok(
+    evaluateSnapshot(invalid, options)[0].reasons.includes(
+      "identity_source_unverified",
+    ),
+  );
+  const column = snapshot({
+    row_observations: [row({ identity_source: "id_column" })],
+  });
+  assert.equal(evaluateSnapshot(column, options)[0].status, "needs_review");
+  column.row_observations[0].cells.push({ header: "Campaign ID", text: "111" });
+  assert.equal(evaluateSnapshot(column, options)[0].status, "ready");
+  column.row_observations[0].cells.at(-1)!.text = "999";
+  assert.equal(evaluateSnapshot(column, options)[0].status, "needs_review");
+});
+
+test("explicit operator no-scope confirmations fill unknown scope and record provenance", () => {
+  const s = snapshot();
+  delete s.reporting_context!.breakdown;
+  delete s.reporting_context!.filters;
+  assert.equal(evaluateSnapshot(s, options)[0].status, "needs_review");
+  const operator = {
+    confirm_no_breakdown: true as const,
+    confirm_no_filters: true as const,
+  };
+  const [reviewed] = evaluateSnapshot(s, { ...options, operator });
+  assert.equal(reviewed.status, "ready", reviewed.reasons.join(","));
+  assert.deepEqual(reviewed.record!.breakdown, {});
+  assert.equal(reviewed.record!.raw._dom_scope_filters, "[]");
+  assert.deepEqual(JSON.parse(reviewed.record!.raw._dom_scope_provenance), {
+    breakdown: "operator",
+    filters: "operator",
+  });
+  const [visible] = evaluateSnapshot(snapshot(), { ...options, operator });
+  assert.equal(visible.status, "ready");
+  assert.deepEqual(JSON.parse(visible.record!.raw._dom_scope_provenance), {
+    breakdown: "dom",
+    filters: "dom",
+  });
+});
+
+test("operator scope confirmations cannot override visible dimensions, filters or missing ID/date/currency", () => {
+  const operator = {
+    confirm_no_breakdown: true as const,
+    confirm_no_filters: true as const,
+  };
+  const filters = snapshot();
+  filters.reporting_context!.filters = [{ status: "active" }];
+  assert.ok(
+    evaluateSnapshot(filters, { ...options, operator })[0].reasons.includes(
+      "filters_conflict",
+    ),
+  );
+  const dimension = snapshot();
+  dimension.row_observations[0].cells.push({ header: "Age", text: "25-34" });
+  assert.ok(
+    evaluateSnapshot(dimension, { ...options, operator })[0].reasons.includes(
+      "breakdown_conflict",
+    ),
+  );
+  const actual = snapshot();
+  actual.reporting_context!.breakdown = { age: "25-34" };
+  assert.ok(
+    evaluateSnapshot(actual, { ...options, operator })[0].reasons.includes(
+      "breakdown_conflict",
+    ),
+  );
+  const missing = snapshot({
+    reporting_context: {
+      date_range_label: "วันนี้",
+      currency: "unverified",
+      timezone: "Asia/Bangkok",
+    },
+    row_observations: [row({ identity: null })],
+  });
+  const [blocked] = evaluateSnapshot(missing, { ...options, operator });
+  assert.equal(blocked.status, "needs_review");
+  for (const reason of [
+    "stable_id_unverified",
+    "date_range_unverified",
+    "currency_unverified",
+  ])
+    assert.ok(blocked.reasons.includes(reason));
+});
+
+test("shared operator context accepts only explicit true confirmations and rejects unknown fields", () => {
+  assert.equal(
+    operatorContextSchema.safeParse({
+      timezone: "Asia/Bangkok",
+      confirm_no_breakdown: true,
+      confirm_no_filters: true,
+    }).success,
+    true,
+  );
+  for (const input of [
+    { confirm_no_breakdown: false },
+    { confirm_no_filters: false },
+    { confirm_no_filters: "true" },
+    { confirm_no_breakdown: 1 },
+    { confirm_no_filters: true, selector: "x" },
+  ]) {
+    assert.equal(operatorContextSchema.safeParse(input).success, false);
+  }
+});
+
+test("explicit vertical row misalignment blocks promotion despite verified ID and mapping claims", () => {
+  for (const alignment of ["mismatch", "unverified"] as const) {
+    const [r] = evaluateSnapshot(
+      snapshot({ row_alignment: alignment }),
+      options,
+    );
+    assert.equal(r.status, "needs_review");
+    assert.equal(r.record, null);
+    assert.ok(
+      r.reasons.includes(
+        alignment === "mismatch"
+          ? "identity_metric_vertical_mismatch"
+          : "row_alignment_unverified",
+      ),
+    );
+  }
+  assert.equal(
+    evaluateSnapshot(snapshot({ row_alignment: "aligned" }), options)[0].status,
+    "ready",
+  );
 });

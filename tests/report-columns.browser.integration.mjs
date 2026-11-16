@@ -68,6 +68,10 @@ try {
   expect(await page.locator("#outside").isChecked()).toBe(false);
   expect(await page.evaluate(() => !!window.published)).toBe(false);
   expect(await page.locator("#field0").isChecked()).toBe(true);
+  const noAccountColumn = await prepare(html().replace(/<label><input type="checkbox"[^>]*>Account ID<\/label>/, ""));
+  expect(noAccountColumn.applied).toBe(true);
+  expect(noAccountColumn.missing_required).toEqual([]);
+  expect(noAccountColumn.missing).toContain("account_id");
   const slowMenu = html().replace(
     "document.querySelector('#custom').hidden=false",
     "setTimeout(()=>{document.querySelector('#custom').hidden=false},1600)",
@@ -90,14 +94,26 @@ try {
   expect(hiddenResult.missing_required).toEqual([]);
   expect(hiddenResult.selected).toContain("spend");
   const searched = `<div role="dialog" aria-labelledby="dialog-title"><h2 id="dialog-title">Customize columns</h2>
-    <span id="search-title">search columns</span><input aria-labelledby="search-title" oninput="document.querySelector('#choices').replaceChildren(); const f=window.available.find(s=>s===this.value);if(f){let li=document.createElement('li');let input=document.createElement('input');input.type='checkbox';li.append(input,document.createTextNode(f));document.querySelector('#choices').append(li);}">
-    <ul id="choices"></ul><button onclick="this.closest('[role=dialog]').remove()">Save</button></div><script>window.available=${JSON.stringify(fields)}</script>`;
+    <span id="search-title">search columns</span><input aria-labelledby="search-title" oninput="document.querySelector('#choices').replaceChildren(); const f=window.available.find(s=>s===this.value);if(f){let li=document.createElement('li');let input=document.createElement('input');input.type='checkbox';input.checked=window.selected.has(f);input.onchange=()=>input.checked?window.selected.add(f):window.selected.delete(f);li.append(input,document.createTextNode(f));document.querySelector('#choices').append(li);}">
+    <ul id="choices"></ul><button onclick="this.closest('[role=dialog]').remove()">Save</button></div><script>window.available=${JSON.stringify(fields)};window.selected=new Set()</script>`;
   const searchedResult = await prepare(searched);
   expect(searchedResult.applied).toBe(true);
   expect(searchedResult.missing_required).toEqual([]);
+  const clippedRequired = await prepare(html().replace(/(<label><input type="checkbox"[^>]*>Ad ID<\/label>)/,
+    '<div style="height:20px;overflow:hidden"><div style="height:40px"></div>$1</div>'));
+  expect(clippedRequired.applied).toBe(false);
+  expect(clippedRequired.missing_required).toContain("ad_id");
+  expect(await page.evaluate(() => !!window.applied)).toBe(false);
   const missing = await prepare(html(true));
   expect(missing.missing_required).toContain("purchases");
-  expect(missing.applied).toBe(true);
+  expect(missing.applied).toBe(false);
+  expect(missing.ok).toBe(false);
+  expect(await page.evaluate(() => !!window.applied)).toBe(false);
+  const reverted = await prepare(html().replace('id="field7"', `id="field7" onclick="document.querySelector('#field4').checked=false"`));
+  expect(reverted.ok).toBe(false);
+  expect(reverted.applied).toBe(false);
+  expect(reverted.missing_required).toContain("ad_id");
+  expect(await page.evaluate(() => !!window.applied)).toBe(false);
   expect(
     (
       await prepare(

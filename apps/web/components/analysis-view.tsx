@@ -24,12 +24,28 @@ const labels: Record<string, string> = {
   attribution: "Attribution",
   result_type: "ประเภทผลลัพธ์",
   duplicate_grain: "ข้อมูลซ้ำ",
+  timezone: "เขตเวลา",
+  currency: "สกุลเงิน",
+  dom_scope_unverified:
+    "หลักฐานบริบทของข้อมูล DOM ยังไม่ครบ ต้องอ่านใหม่หรือนำเข้า CSV ที่ตรวจแล้ว",
+  group_quality_blocked: "ชุดรายงานมีข้อมูลซ้ำหรือบริบทไม่ยืนยัน",
+  overlapping_interval: "ช่วงวันที่ทับซ้อน",
+  nonpositive_spend: "ยอดใช้จ่ายต้องมากกว่า 0 เพื่อเทียบต้นทุน",
+  nonpositive_impressions: "ยังไม่มีอิมเพรสชันสำหรับเทียบ",
   link_ctr: "Link CTR",
   link_cpc: "Link CPC",
   cpm: "CPM",
   cost_per_conversion: "ต้นทุนต่อคอนเวอร์ชั่น",
   purchase_roas: "ROAS",
 };
+const evaluationLabels = {
+  blocked: "ยังประเมินไม่ได้",
+  insufficient_sample: "ผลลัพธ์ยังน้อย",
+  insufficient_peers: "แอดสำหรับเทียบยังน้อย",
+  lower_cost: "ต้นทุนต่ำกว่าค่ากลาง",
+  typical_cost: "ต้นทุนใกล้ค่ากลาง",
+  higher_cost: "ต้นทุนสูงกว่าค่ากลาง",
+} as const;
 const metricLabel = (k: string) => labels[k] ?? k;
 function fmt(n: number | null | undefined) {
   return n === null || n === undefined ? "—" : number(n);
@@ -87,6 +103,7 @@ export default function AnalysisView({
             r.timezone,
             r.attribution,
             r.result_type,
+            r.objective,
             Object.entries(r.breakdown).sort(),
           ]) === group.key,
       )
@@ -119,12 +136,21 @@ export default function AnalysisView({
           timezone: r.timezone,
           attribution: r.attribution,
           result_type: r.result_type,
+          objective: r.objective,
           ...r.reported,
           ...Object.fromEntries(
             Object.entries(r.derived).map(([k, v]) => [`calculated_${k}`, v]),
           ),
           readiness: r.readiness,
           missing: r.missing.join("|"),
+          evaluation_status: r.evaluation.status,
+          evaluation_blockers: r.evaluation.blockers.join("|"),
+          evaluation_reasons: r.evaluation.reasons.join(" | "),
+          evaluation_next_steps: r.evaluation.next_steps.join(" | "),
+          comparable_ads: r.evaluation.comparison?.peer_count,
+          median_cost_per_conversion:
+            r.evaluation.comparison?.median_cost_per_conversion,
+          relative_cost: r.evaluation.comparison?.relative_cost,
         }).map(([k, v]) => [k, csvSafe(v)]),
       ),
     );
@@ -176,6 +202,7 @@ export default function AnalysisView({
                     <option key={g.key} value={g.key}>
                       {g.date_start} ถึง {g.date_end} · {g.currency} ·{" "}
                       {g.attribution} · {g.result_type} ·{" "}
+                      {g.objective ?? "ไม่ระบุวัตถุประสงค์"} ·{" "}
                       {JSON.stringify(g.breakdown)}
                     </option>
                   ))
@@ -220,7 +247,7 @@ export default function AnalysisView({
                   await send({
                     command: "start",
                     levels: ["ads"],
-                    maxSteps: 5,
+                    maxSteps: 12,
                     scan_columns: true,
                   });
                 })
@@ -427,6 +454,13 @@ export default function AnalysisView({
                 {rows.filter((r) => !r.missing.length).length} / {rows.length}{" "}
                 แถวมีค่าหลักครบสำหรับเป้าหมายนี้ · ความครบทั้งบัญชียังไม่ยืนยัน
               </p>
+              <p className="hint">
+                ประเมินต้นทุนเทียบแอดในชุดเดียวกันเมื่อมีอย่างน้อย{" "}
+                {report.evaluation_policy.min_conversions} คอนเวอร์ชั่นต่อแอด และ{" "}
+                {report.evaluation_policy.min_comparable_ads} แอดที่ผ่านเกณฑ์
+                เป็นการคัดกรองเชิงพรรณนา ไม่ยืนยันนัยสำคัญทางสถิติหรือกำไร
+                และไม่เปลี่ยนงบอัตโนมัติ
+              </p>
             </>
           ) : (
             <p>
@@ -452,6 +486,7 @@ export default function AnalysisView({
                 <th>Link CTR คำนวณ</th>
                 <th>ROAS คำนวณ</th>
                 <th>ความพร้อม</th>
+                <th>ผลประเมินและขั้นตอนถัดไป</th>
               </tr>
             </thead>
             <tbody>
@@ -479,10 +514,39 @@ export default function AnalysisView({
                       </Pill>
                       <small>{r.missing.map(metricLabel).join(", ")}</small>
                     </td>
+                    <td>
+                      <Pill
+                        kind={
+                          r.evaluation.status === "blocked" ||
+                          r.evaluation.status === "higher_cost"
+                            ? "warning"
+                            : "neutral"
+                        }
+                      >
+                        {evaluationLabels[r.evaluation.status]}
+                      </Pill>
+                      <details>
+                        <summary>เหตุผลและสิ่งที่ควรตรวจ</summary>
+                        {r.evaluation.reasons.map((reason, i) => (
+                          <p key={`reason-${i}`}>{reason}</p>
+                        ))}
+                        {r.evaluation.blockers.length ? (
+                          <p>
+                            ข้อมูลที่ต้องตรวจ:{" "}
+                            {r.evaluation.blockers.map(metricLabel).join(", ")}
+                          </p>
+                        ) : null}
+                        <ol>
+                          {r.evaluation.next_steps.map((step, i) => (
+                            <li key={i}>{step}</li>
+                          ))}
+                        </ol>
+                      </details>
+                    </td>
                   </tr>
                 ))
               ) : (
-                <EmptyRow cols={7}>ยังไม่มีข้อมูลที่แสดงได้</EmptyRow>
+                <EmptyRow cols={8}>ยังไม่มีข้อมูลที่แสดงได้</EmptyRow>
               )}
             </tbody>
           </table>

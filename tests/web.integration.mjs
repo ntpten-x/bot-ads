@@ -189,6 +189,12 @@ try {
   await page.getByLabel("เป้าหมายหลัก", { exact: true }).selectOption("sales");
   await expect(page.locator(".data-table")).toContainText("การซื้อ");
   await expect(page.locator(".data-table")).toContainText("ข้อมูลยังขาด");
+  await expect(
+    page.getByRole("columnheader", {
+      name: "ผลประเมินและขั้นตอนถัดไป",
+      exact: true,
+    }),
+  ).toBeVisible();
   const analysisDownload = page.waitForEvent("download");
   await page
     .getByRole("button", { name: "ส่งออกชุดวิเคราะห์ JSON", exact: true })
@@ -199,6 +205,8 @@ try {
   expect(analysisData.goal).toBe("sales");
   expect(analysisData.rows).toHaveLength(2);
   expect(analysisData.rows[0].derived.cost_per_conversion).toBeNull();
+  expect(analysisData.rows[0].evaluation.status).toBe("blocked");
+  expect(analysisData.rows[0].evaluation.next_steps.length).toBeGreaterThan(0);
   expect(analysisData.coverage).toBe("unverified");
   await page
     .getByRole("button", { name: "ตั้งคอลัมน์วิเคราะห์ใน Meta", exact: true })

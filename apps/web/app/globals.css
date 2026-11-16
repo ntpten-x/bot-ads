@@ -831,6 +831,17 @@ td .text-button {
 .panel-form > label {
   margin-top: 0;
 }
+.panel-form > .checkbox-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+.checkbox-line > input[type="checkbox"] {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
 .panel-form > div > label {
   margin-top: 16px;
 }

@@ -25,8 +25,11 @@
     "test:connect": "node --env-file=.env tests/connect.browser.integration.mjs",
     "test:reader": "node tests/reader.browser.integration.mjs",
     "test:analysis": "node --env-file=.env tests/analysis.api.integration.mjs",
+    "test:capture-analysis-web": "node tests/capture-analysis.web.integration.mjs",
     "test:report-columns": "node tests/report-columns.browser.integration.mjs",
-    "test:report-input": "node tests/report-input.browser.integration.mjs"
+    "test:report-probe": "node tests/report-probe.browser.integration.mjs",
+    "test:report-input": "node tests/report-input.browser.integration.mjs",
+    "test:report-scroll": "node tests/report-scroll.browser.integration.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",

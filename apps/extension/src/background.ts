@@ -4,7 +4,7 @@ import {
   suiteUrl,
 } from "../../../packages/core/src/control.js";
 import { controlUi, uiSession } from "./ui-controller.js";
-import { prepareReportWithInput } from "./report-input.js";
+import { prepareReportWithInput, scrollReportWithInput } from "./report-input.js";
 import {
   readVisibleTable,
   scrollReportingRows,
@@ -245,7 +245,29 @@ async function advance() {
         target: { tabId: job.tabId },
         func: scrollReportingRows,
       });
-      const paging = scrolled.result;
+      let paging: { moved: boolean; method: string; tried: unknown[]; reason?: string } | undefined = scrolled.result;
+      if ((await getJob())?.status !== "running") return;
+      if (!paging?.moved && (await getJob())?.status === "running") {
+        const bridge = await getBridge();
+        const native = await scrollReportWithInput({
+          jobId: job.id,
+          tabId: job.tabId,
+          account: job.account,
+          enabled: !!bridge?.enabled && bridge.tabId === job.tabId && bridge.account === job.account,
+        });
+        if ((await getJob())?.status !== "running") return;
+        paging = {
+          moved: native.moved,
+          method: native.method,
+          tried: [...(paging?.tried ?? []), { method: "native_wheel", moved: native.moved, ...("reason" in native ? { reason: native.reason } : {}), ...("target_diagnostics" in native ? { target_diagnostics: native.target_diagnostics } : {}) }],
+          ...("reason" in native ? { reason: native.reason } : {}),
+        };
+        if (!native.moved) job.level_warnings = [...(job.level_warnings ?? []),
+          native.reason === "report_input_lease_required"
+            ? `${job.levels[job.index]}: เลื่อนแถวด้วย DOM ไม่ได้ เปิดเมาส์/คีย์บอร์ดรายงานใน popup แล้วเริ่มอ่านใหม่ ข้อมูลรอบนี้ยังไม่ครบ`
+            : `${job.levels[job.index]}: ไม่ยืนยันการเลื่อนแถว (${native.reason}) ข้อมูลรอบนี้ยังไม่ครบ`,
+        ];
+      }
       job.scroll_log = [
         ...(job.scroll_log ?? []),
         {

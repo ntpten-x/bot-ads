@@ -20,6 +20,57 @@ const record = () => {
   assert.equal(r.valid, true, r.errors.join("\n"));
   return r.records[0];
 };
+
+test("legacy DOM records lacking verified scope metadata cannot guide normalized evaluations or totals", () => {
+  const legacy = ["331", "332", "333"].map((ad_id) => ({
+    ...record(),
+    ad_id,
+    raw: { ...record().raw, _source: "dom_capture" },
+  }));
+  const report = buildAnalysis(legacy);
+  assert.equal(report.summary.ready_rows, 0);
+  assert.ok(
+    report.rows.every(
+      (r) =>
+        r.evaluation.status === "blocked" &&
+        r.missing.includes("dom_scope_unverified"),
+    ),
+  );
+  assert.equal(report.groups[0].totals.spend, null);
+  assert.equal(report.groups[0].totals.conversions, null);
+});
+
+test("normalized DOM scope metadata must match preserved breakdown and explicit no-filter proof", () => {
+  const trusted = ["331", "332", "333"].map((ad_id) => ({
+    ...record(),
+    ad_id,
+    breakdown: {},
+    raw: {
+      ...record().raw,
+      _source: "dom_capture",
+      _dom_scope_version: "1",
+      _dom_scope_filters: "[]",
+      _dom_scope_breakdown: "{}",
+      _dom_identity_source: "row_link_href",
+    },
+  }));
+  const good = buildAnalysis(trusted);
+  assert.equal(good.summary.ready_rows, 3);
+  assert.ok(good.rows.every((r) => r.evaluation.status === "typical_cost"));
+  for (const patch of [
+    { _dom_scope_version: "0" },
+    { _dom_scope_filters: '[{"status":"active"}]' },
+    { _dom_scope_breakdown: '{"age":"25-34"}' },
+    { _dom_scope_breakdown: "not-json" },
+    { _dom_identity_source: "name" },
+  ]) {
+    const r = buildAnalysis(
+      trusted.map((row) => ({ ...row, raw: { ...row.raw, ...patch } })),
+    );
+    assert.equal(r.summary.ready_rows, 0);
+    assert.ok(r.rows.every((row) => row.evaluation.status === "blocked"));
+  }
+});
 test("analysis preserves measured metrics and derives unit-correct ratios for selected goal", () => {
   const r = buildAnalysis([record()], "sales");
   assert.equal(r.summary.ready_rows, 1);
@@ -157,4 +208,112 @@ test("capture review rejects other accounts, preserves duplicate names and never
   assert.equal(r.captures[0].rows[0].values.results, null);
   assert.equal(r.ready_for_import, false);
   assert.equal(r.captures[0].rows[1].values.spend, null);
+});
+
+// These tests catch decision guidance escaping its evidence scope, rather than
+// merely checking the presence of an analysis or the arithmetic it displays.
+const evaluatedRecord = (id: string, spend: number, conversions: number) => {
+  const r = record();
+  return {
+    ...r,
+    ad_id: id,
+    spend,
+    metrics: {
+      ...r.metrics,
+      messaging_conversations: conversions,
+      leads: conversions,
+      purchases: conversions,
+    },
+  };
+};
+test("evaluation compares explicit goal cost only within compatible reporting and objective scopes", () => {
+  const a = evaluatedRecord("301", 50, 10);
+  const b = evaluatedRecord("302", 100, 10);
+  const c = evaluatedRecord("303", 200, 10);
+  const report = buildAnalysis([
+    a,
+    b,
+    c,
+    { ...evaluatedRecord("304", 10000, 10), currency: "USD" },
+  ]);
+  assert.equal(report.rows[0].evaluation?.status, "lower_cost");
+  assert.equal(report.rows[1].evaluation?.status, "typical_cost");
+  assert.equal(report.rows[2].evaluation?.status, "higher_cost");
+  assert.deepEqual(report.rows[2].evaluation?.comparison, {
+    peer_count: 3,
+    median_cost_per_conversion: 10,
+    relative_cost: 2,
+  });
+  assert.equal(report.rows[3].evaluation?.status, "insufficient_peers");
+  assert.ok(report.rows[2].evaluation?.next_steps.length);
+  const isolated = buildAnalysis([
+    a,
+    { ...b, objective: "SALES" },
+    { ...c, objective: "LEADS" },
+  ]);
+  assert.ok(
+    isolated.rows.every((r) => r.evaluation?.status === "insufficient_peers"),
+  );
+});
+test("evaluation distinguishes missing conversions, measured zero, low sample and zero-spend data", () => {
+  for (const goal of ["messages", "sales", "leads"] as const) {
+    const zero = evaluatedRecord("301", 100, 0);
+    const missing = evaluatedRecord("302", 100, 10);
+    delete missing.metrics[
+      goal === "messages"
+        ? "messaging_conversations"
+        : goal === "sales"
+          ? "purchases"
+          : "leads"
+    ];
+    const report = buildAnalysis(
+      [
+        zero,
+        missing,
+        evaluatedRecord("303", 100, 4),
+        evaluatedRecord("304", 0, 10),
+      ],
+      goal,
+    );
+    assert.equal(report.rows[0].evaluation?.status, "insufficient_sample");
+    assert.ok(report.rows[0].evaluation?.reasons.some((r) => r.includes("0")));
+    assert.equal(report.rows[1].evaluation?.status, "blocked");
+    assert.equal(report.rows[1].conversions, null);
+    assert.equal(report.rows[2].evaluation?.status, "insufficient_sample");
+    assert.equal(report.rows[3].evaluation?.status, "blocked");
+    assert.ok(
+      report.rows[3].evaluation?.blockers.includes("nonpositive_spend"),
+    );
+  }
+});
+test("duplicate, overlapping and unknown-context observations never guide relative decisions", () => {
+  const a = evaluatedRecord("301", 50, 10);
+  const duplicate = buildAnalysis([
+    a,
+    a,
+    evaluatedRecord("302", 100, 10),
+    evaluatedRecord("303", 200, 10),
+  ]);
+  assert.ok(duplicate.rows.every((r) => r.evaluation?.status === "blocked"));
+  const overlapping = buildAnalysis([
+    a,
+    { ...a, date_end: "2026-11-05" },
+    evaluatedRecord("302", 100, 10),
+    evaluatedRecord("303", 200, 10),
+  ]);
+  assert.equal(overlapping.rows[0].evaluation?.status, "blocked");
+  assert.equal(overlapping.rows[1].evaluation?.status, "blocked");
+  assert.ok(
+    overlapping.rows[0].evaluation?.blockers.includes("overlapping_interval"),
+  );
+  for (const context of [
+    { timezone: "unverified" },
+    { attribution: "unverified" },
+    { result_type: "unverified" },
+  ]) {
+    assert.equal(
+      buildAnalysis([{ ...a, ...context }]).rows[0].evaluation?.status,
+      "blocked",
+    );
+  }
 });
