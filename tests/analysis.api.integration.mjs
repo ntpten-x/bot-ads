@@ -54,6 +54,11 @@ try {
   assert.equal(p.analysis.rows[0].evaluation.status, "insufficient_sample");
   assert.equal(p.analysis.rows[0].evaluation.comparison, null);
   assert.equal(p.analysis.evaluation_policy.min_conversions, 5);
+  assert.equal(p.validation.reconciliation.verified, true);
+  assert.equal(p.validation.scope_coverage, "verified_for_import");
+  assert.equal(p.analysis.scope_coverage, "verified_for_import");
+  assert.equal(p.analysis.reconciliation.rows.matched, true);
+  assert.equal(p.analysis.coverage, "unverified");
   assert.ok(p.analysis.rows[0].evaluation.next_steps.length > 0);
   const bad = await api(
     "/analysis/preview",
@@ -61,6 +66,7 @@ try {
     422,
   );
   assert.equal(bad.validation.valid, false);
+  assert.equal(bad.validation.reconciliation.status, "mismatch");
   assert.equal(bad.analysis, undefined);
   const saved = await api("/imports", input, 201);
   assert.ok(saved.job_id);
@@ -73,8 +79,14 @@ try {
   assert.equal(data.records[0].metrics.messaging_conversations, 20);
   assert.equal(data.records[0].metrics.purchases, 2);
   assert.equal(data.records[0].purchase_value, 600);
+  const proof = JSON.parse(
+    data.records[0].raw._import_reconciliation,
+  );
+  assert.equal(proof.version, 1);
+  assert.equal(proof.filename, "analysis-integration.csv");
+  assert.equal(proof.reconciliation.verified, true);
   console.log(
-    "Analysis API integration passed: auth, validated preview, rejected reconciliation, persistent metrics, exact IDs and idempotent import",
+    "Analysis API integration passed: auth, validated preview, rejected reconciliation, persistent metrics/provenance, exact IDs and idempotent import",
   );
 } finally {
   await cleanupWebFixture(account, device);

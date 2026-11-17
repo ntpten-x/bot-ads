@@ -99,7 +99,11 @@ for(const input of document.querySelectorAll('#menu input[type=checkbox]')){
     else window.selected.delete(input.dataset.key);
     const url=new URL(location.href);
     for(const key of ['age','gender','platform','placement'])url.searchParams.delete(key+'_breakdown');
-    for(const key of window.selected)url.searchParams.append(key+'_breakdown',key);
+    url.searchParams.delete('demographics_breakdown');
+    for(const key of window.selected){
+      if(key==='age'||key==='gender')url.searchParams.set('demographics_breakdown',key);
+      else url.searchParams.set(key+'_breakdown',key);
+    }
     history.replaceState({},'',url);
   });
 }
@@ -156,6 +160,15 @@ for(const input of document.querySelectorAll('#menu input[type=checkbox]')){
   expect(second.selected).toEqual(["age"]);
   expect(second.cleared).toEqual(["gender"]);
   expect(await page.evaluate(() => [...window.selected])).toEqual(["age"]);
+  const trustedBeforeRepeat = await page.evaluate(() => window.trusted);
+  const repeated = await worker.evaluate(
+    (value) => BreakdownFixture.configureBreakdownWithInput(value, ["age"]),
+    binding,
+  );
+  expect(repeated.ok, JSON.stringify(repeated)).toBe(true);
+  expect(repeated.selected).toEqual(["age"]);
+  expect(repeated.missing).toEqual([]);
+  expect(await page.evaluate(() => window.trusted)).toBe(trustedBeforeRepeat);
   expect(await page.evaluate(() => window.untrusted)).toBe(0);
   expect(await page.locator("#outside").isChecked()).toBe(false);
   expect(

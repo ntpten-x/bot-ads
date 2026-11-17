@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
 import type {
   CaptureJobAnalysis,
@@ -40,7 +40,7 @@ export const deliveryNames: Record<Delivery, string> = {
   unknown: "ไม่ทราบ",
 };
 const deliveryKind = (d: Delivery) =>
-  d === "payment_error" || d === "rejected"
+  d === "rejected"
     ? "error"
     : d === "active"
       ? "success"
@@ -89,10 +89,44 @@ export default function CaptureAnalysisPanel({
 }) {
   const [selection, setSelection] = useState({ account, job: "" });
   const selectedJob = selection.account === account ? selection.job : "";
+  const [operator, setOperator] = useState({
+    timezone: "",
+    attribution: "",
+    useTimezone: false,
+    useAttribution: false,
+    noFilters: false,
+    noBreakdown: false,
+  });
+  useEffect(() => {
+    setOperator({
+      timezone: localStorage.getItem("analysisTimezone") ?? "",
+      attribution: localStorage.getItem("analysisAttribution") ?? "",
+      useTimezone: localStorage.getItem("analysisUseTimezone") === "true",
+      useAttribution: localStorage.getItem("analysisUseAttribution") === "true",
+      noFilters: localStorage.getItem("analysisNoFilters") === "true",
+      noBreakdown: localStorage.getItem("analysisNoBreakdown") === "true",
+    });
+  }, []);
+  const updateOperator = (patch: Partial<typeof operator>) => {
+    const next = { ...operator, ...patch };
+    setOperator(next);
+    localStorage.setItem("analysisTimezone", next.timezone);
+    localStorage.setItem("analysisAttribution", next.attribution);
+    localStorage.setItem("analysisUseTimezone", String(next.useTimezone));
+    localStorage.setItem("analysisUseAttribution", String(next.useAttribution));
+    localStorage.setItem("analysisNoFilters", String(next.noFilters));
+    localStorage.setItem("analysisNoBreakdown", String(next.noBreakdown));
+  };
+  const params = new URLSearchParams({ account_id: account });
+  if (selectedJob) params.set("job_id", selectedJob);
+  if (operator.useTimezone && operator.timezone.trim())
+    params.set("timezone", operator.timezone.trim());
+  if (operator.useAttribution && operator.attribution.trim())
+    params.set("attribution", operator.attribution.trim());
+  if (operator.noFilters) params.set("confirm_no_filters", "true");
+  if (operator.noBreakdown) params.set("confirm_no_breakdown", "true");
   const analysis = useSWR<Response>(
-    account
-      ? `/captures/analysis?account_id=${account}${selectedJob ? `&job_id=${selectedJob}` : ""}`
-      : null,
+    account ? `/captures/analysis?${params.toString()}` : null,
     api,
     {
       refreshInterval: 30000,
@@ -157,6 +191,75 @@ export default function CaptureAnalysisPanel({
               : "ยังยืนยันจำนวนแอดไม่ได้"}{" "}
             · ยอดใช้จ่าย: {spendNames[a.data_quality.spend] ?? "ยังไม่ยืนยัน"}
           </p>
+          <div className="analysis-context">
+            <h4>ยืนยันบริบทของรายงานเพื่อให้จัดอันดับได้</h4>
+            <div className="form-grid">
+              <label>
+                เขตเวลา (IANA)
+                <input
+                  value={operator.timezone}
+                  onChange={(e) =>
+                    updateOperator({ timezone: e.target.value })
+                  }
+                  placeholder="Asia/Bangkok"
+                />
+              </label>
+              <label>
+                Attribution
+                <input
+                  value={operator.attribution}
+                  onChange={(e) =>
+                    updateOperator({ attribution: e.target.value })
+                  }
+                  placeholder="เช่น 7-day click"
+                />
+              </label>
+            </div>
+            <label className="checkbox-line">
+              <input
+                type="checkbox"
+                checked={operator.useTimezone}
+                onChange={(e) =>
+                  updateOperator({ useTimezone: e.target.checked })
+                }
+              />
+              ใช้เขตเวลานี้เป็นหลักฐานที่ผู้ใช้ยืนยัน
+            </label>
+            <label className="checkbox-line">
+              <input
+                type="checkbox"
+                checked={operator.useAttribution}
+                onChange={(e) =>
+                  updateOperator({ useAttribution: e.target.checked })
+                }
+              />
+              ใช้ Attribution นี้เป็นหลักฐานที่ผู้ใช้ยืนยัน
+            </label>
+            <label className="checkbox-line">
+              <input
+                type="checkbox"
+                checked={operator.noFilters}
+                onChange={(e) =>
+                  updateOperator({ noFilters: e.target.checked })
+                }
+              />
+              ยืนยันบริบท: ไม่มีตัวกรองรายงาน
+            </label>
+            <label className="checkbox-line">
+              <input
+                type="checkbox"
+                checked={operator.noBreakdown}
+                onChange={(e) =>
+                  updateOperator({ noBreakdown: e.target.checked })
+                }
+              />
+              ยืนยันบริบท: ไม่มี Breakdown
+            </label>
+            <p className="small muted">
+              ระบบใช้เฉพาะค่าที่ติ๊กยืนยันและไม่เดาเขตเวลา ตัวกรอง หรือ
+              Breakdown; การยืนยันเหล่านี้เป็นเพียงบริบทของรายงาน ไม่ได้เปลี่ยนโฆษณา
+            </p>
+          </div>
           {a.job.error ? <Note>งานอ่านมีข้อผิดพลาด: {a.job.error}</Note> : null}
           {a.job.level_warnings?.map((warning, i) => (
             <Note key={i}>{warning}</Note>
@@ -168,23 +271,32 @@ export default function CaptureAnalysisPanel({
           {a.levels.map((l) => (
             <div key={l.scope_key} className="capture-analysis-level">
               <h3>
-                {levelNames[l.level]} · ยืนยัน ID ได้ {l.verified_unique_rows}
-                {l.reported_total_rows !== null
-                  ? ` จาก ${l.reported_total_rows}`
-                  : ""}{" "}
-                แถว{" "}
+                {levelNames[l.level]} ·{" "}
+                {l.coverage === "lower_bound"
+                  ? `ยืนยัน ID ได้ ${l.verified_unique_rows} แถว (ขั้นต่ำของกลุ่มนี้)`
+                  : `ยืนยัน ID ได้ ${l.verified_unique_rows}${
+                      l.reported_total_rows !== null &&
+                      l.reported_total_scope === "partition"
+                        ? ` จาก ${l.reported_total_rows}`
+                        : ""
+                    } แถว`}{" "}
                 <Pill kind={l.coverage === "complete" ? "success" : "warning"}>
                   {l.coverage === "complete"
                     ? "จำนวน ID ตรงกับยอดรวมที่มองเห็น"
-                    : l.coverage === "partial"
-                      ? "ยังไม่ครบ"
-                      : "ยังยืนยันจำนวนแอดไม่ได้"}
+                    : l.coverage === "lower_bound"
+                      ? "ยังไม่ทราบจำนวนรวมของกลุ่มนี้"
+                      : l.coverage === "partial"
+                        ? "ยังไม่ครบ"
+                        : "ยังยืนยันจำนวนแอดไม่ได้"}
                 </Pill>
               </h3>
               <p className="small muted">
                 หลักฐานดิบ {l.observed_rows} แถวจาก {l.snapshots} ภาพ ·
                 ยังเชื่อมตัวตนไม่ได้ {l.unresolved_observations} รายการ ·{" "}
                 {spendNames[l.spend_quality]}
+                {l.reported_total_rows !== null
+                  ? ` · ตัวเลขท้ายรายงาน ${l.reported_total_rows} แถว (${l.reported_total_scope === "report" ? "ทั้งรายงาน" : "ตรงขอบเขตนี้"})`
+                  : ""}
               </p>
               <p className="small muted">
                 {l.context.date_range_label ?? "ไม่ทราบช่วงวันที่"} · สกุลเงิน{" "}

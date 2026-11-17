@@ -133,9 +133,10 @@ export const botCommandSchema = z.union([
   uiCommandSchema,
 ]);
 export type BreakdownQueryParam = readonly [string, string];
+export type ReportingLevel = "campaigns" | "adsets" | "ads";
 export function reportingUrl(
   account: string,
-  level: "campaigns" | "adsets" | "ads",
+  level: ReportingLevel,
   breakdownParams: readonly BreakdownQueryParam[] = [],
 ) {
   if (!/^\d+$/.test(account)) throw new Error("Valid account required");
@@ -152,6 +153,50 @@ export function reportingUrl(
     url.searchParams.set(key, value);
   }
   return url;
+}
+function canonicalBreakdownParams(params: readonly BreakdownQueryParam[]) {
+  return params
+    .map(([key, value]) => `${key}=${value}`)
+    .sort()
+    .join("&");
+}
+export function needsReportingNavigation(
+  raw: string,
+  account: string,
+  level: ReportingLevel,
+  breakdownParams: readonly BreakdownQueryParam[] = [],
+) {
+  let url: URL;
+  let expected: URL;
+  try {
+    url = new URL(raw);
+    expected = reportingUrl(account, level, breakdownParams);
+  } catch {
+    return true;
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.port ||
+    url.username ||
+    url.password ||
+    !["adsmanager.facebook.com", "business.facebook.com"].includes(
+      url.hostname,
+    ) ||
+    url.pathname.replace(/\/+$/, "") !== expected.pathname ||
+    url.searchParams.getAll("act").length !== 1 ||
+    url.searchParams.get("act") !== account
+  )
+    return true;
+  const actualBreakdown: BreakdownQueryParam[] = [];
+  for (const [key, value] of url.searchParams) {
+    if (!/^[a-z0-9_]{1,64}_breakdown$/i.test(key)) continue;
+    if (!/^[a-z0-9_,.-]{1,100}$/i.test(value)) return true;
+    actualBreakdown.push([key, value]);
+  }
+  return (
+    canonicalBreakdownParams(actualBreakdown) !==
+    canonicalBreakdownParams(breakdownParams)
+  );
 }
 export function suiteUrl(raw: string, account: string, requireAccount = false) {
   const url = new URL(raw);

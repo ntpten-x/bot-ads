@@ -22,6 +22,41 @@ const recordLevel = {
   ads: "ad",
 } as const;
 
+const breakdownDimensionHeaders: [
+  RegExp,
+  keyof NonNullable<AdRecord["breakdown"]>,
+][] = [
+  [/^(?:age|อายุ)$/i, "age"],
+  [/^(?:gender|เพศ)$/i, "gender"],
+  [/^(?:country|ประเทศ)$/i, "country"],
+  [/^(?:region|ภูมิภาค)$/i, "region"],
+  [/^(?:placement|ตำแหน่งการจัดวาง)$/i, "placement"],
+  [
+    /^(?:platform|publisher platform|แพลตฟอร์ม|แพลตฟอร์มผู้เผยแพร่)$/i,
+    "publisher_platform",
+  ],
+  [/^(?:platform position|ตำแหน่งบนแพลตฟอร์ม)$/i, "platform_position"],
+  [/^(?:impression device|อุปกรณ์ที่แสดงผล)$/i, "impression_device"],
+  [/^(?:device platform|แพลตฟอร์มอุปกรณ์)$/i, "device_platform"],
+  [/^(?:device|อุปกรณ์)$/i, "device"],
+];
+
+/** Stable dedupe key for one entity + visible breakdown combination. */
+function captureGrainKey(row: CaptureRow): string | null {
+  if (!row.identity || !/^\d+$/.test(row.identity)) return null;
+  const dimensions: [string, string][] = [];
+  for (const cell of row.cells) {
+    const dimension = breakdownDimensionHeaders.find(([pattern]) =>
+      pattern.test(cell.header.trim()),
+    )?.[1];
+    if (dimension) dimensions.push([dimension, cell.text.trim()]);
+  }
+  dimensions.sort(
+    ([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv),
+  );
+  return JSON.stringify([row.identity, dimensions]);
+}
+
 const rowSchema = z
   .object({
     identity: z.string().nullable(),
@@ -289,7 +324,7 @@ export function evaluateCaptureRow(
   row: CaptureRow,
   options: {
     bound_account: string;
-    duplicate_ids?: Set<string>;
+    duplicate_grains?: Set<string>;
     operator?: OperatorContext;
     campaign_names?: Map<string, string>;
   },
@@ -311,8 +346,9 @@ export function evaluateCaptureRow(
       record: null,
     };
   const id = row.identity && /^\d+$/.test(row.identity) ? row.identity : null;
+  const grainKey = captureGrainKey(row);
   if (!id) reasons.push("stable_id_unverified");
-  else if (options.duplicate_ids?.has(id))
+  else if (grainKey && options.duplicate_grains?.has(grainKey))
     reasons.push("duplicate_id_in_snapshot");
   if (!["row_link_href", "id_column"].includes(row.identity_source ?? ""))
     reasons.push("identity_source_unverified");
@@ -385,23 +421,6 @@ export function evaluateCaptureRow(
     if (options.operator?.confirm_no_filters === true)
       reasons.push("filters_conflict");
   }
-  const dimensionHeaders: [RegExp, keyof NonNullable<AdRecord["breakdown"]>][] =
-    [
-      [/^(?:age|อายุ)$/i, "age"],
-      [/^(?:gender|เพศ)$/i, "gender"],
-      [/^(?:country|ประเทศ)$/i, "country"],
-      [/^(?:region|ภูมิภาค)$/i, "region"],
-      [/^(?:placement|ตำแหน่งการจัดวาง)$/i, "placement"],
-      [
-        /^(?:platform|publisher platform|แพลตฟอร์ม|แพลตฟอร์มผู้เผยแพร่)$/i,
-        "publisher_platform",
-      ],
-      [/^(?:platform position|ตำแหน่งบนแพลตฟอร์ม)$/i, "platform_position"],
-      [/^(?:impression device|อุปกรณ์ที่แสดงผล)$/i, "impression_device"],
-      [/^(?:device platform|แพลตฟอร์มอุปกรณ์)$/i, "device_platform"],
-      [/^(?:device|อุปกรณ์)$/i, "device"],
-    ];
-
   const values: Record<string, number> = {};
   const symbols = new Set<string>();
   const seen = new Set<string>();
@@ -410,7 +429,7 @@ export function evaluateCaptureRow(
   let name: string | null = null;
   let idFromColumn: string | null = null;
   for (const cell of row.cells) {
-    const dimension = dimensionHeaders.find(([pattern]) =>
+    const dimension = breakdownDimensionHeaders.find(([pattern]) =>
       pattern.test(cell.header.trim()),
     )?.[1];
     if (dimension) {
@@ -605,13 +624,15 @@ export function evaluateSnapshot(
   },
 ) {
   const counts = new Map<string, number>();
-  for (const r of snapshot.row_observations)
-    if (r.identity) counts.set(r.identity, (counts.get(r.identity) ?? 0) + 1);
-  const duplicate_ids = new Set(
+  for (const r of snapshot.row_observations) {
+    const key = captureGrainKey(r);
+    if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const duplicate_grains = new Set(
     [...counts].filter(([, n]) => n > 1).map(([id]) => id),
   );
   const rows = snapshot.row_observations.map((row) =>
-    evaluateCaptureRow(snapshot, row, { ...options, duplicate_ids }),
+    evaluateCaptureRow(snapshot, row, { ...options, duplicate_grains }),
   );
   // Two ready rows must not claim the same reporting grain with different data.
   const grains = new Map<string, number>();

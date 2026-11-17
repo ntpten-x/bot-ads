@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   type BreakdownQueryParam,
   botCommandSchema,
+  needsReportingNavigation,
   reportingUrl,
   suiteUrl,
 } from "../../../packages/core/src/control.js";
@@ -9,11 +10,13 @@ import { controlUi, uiSession } from "./ui-controller.js";
 import { configureBreakdownWithInput } from "./breakdown-input.js";
 import {
   prepareReportWithInput,
+  resetReportScrollWithInput,
   scrollReportColumnsWithInput,
   scrollReportWithInput,
 } from "./report-input.js";
 import {
   readVisibleTable,
+  resetReportingRows,
   scrollReportingRows,
   scrollReportingTable,
   waitForReportingRows,
@@ -29,6 +32,8 @@ type Job = {
   maxSteps: number;
   scan_columns?: boolean;
   horizontal_step?: number;
+  row_reset?: unknown;
+  native_row_reset?: unknown;
   read_attempts?: number;
   last_wait_reason?: string;
   level_warnings?: string[];
@@ -195,6 +200,26 @@ async function advance() {
       args: [8000],
     });
     const diag = waited.result;
+    if (job.step === 0) {
+      const [reset] = await chrome.scripting.executeScript({
+        target: { tabId: job.tabId },
+        func: resetReportingRows,
+      });
+      job.row_reset = reset.result;
+      const bridge = await getBridge();
+      if (
+        bridge?.enabled &&
+        bridge.tabId === job.tabId &&
+        bridge.account === job.account
+      )
+        job.native_row_reset = await resetReportScrollWithInput({
+          jobId: job.id,
+          tabId: job.tabId,
+          account: job.account,
+          enabled: true,
+        });
+      await put(job);
+    }
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: job.tabId },
       func: readVisibleTable,
@@ -251,7 +276,10 @@ async function advance() {
       await put(job);
       void publishSoon();
     }
-    if (job.scan_columns) {
+    const hasHorizontalOverflow = !!snapshot.column_alignment_diagnostics?.scrollers?.some(
+      (scroller) => scroller.range > 2,
+    );
+    if (job.scan_columns && hasHorizontalOverflow) {
       if ((job.horizontal_step ?? 0) < 12) {
         const [pan] = await chrome.scripting.executeScript({
           target: { tabId: job.tabId },
@@ -315,11 +343,12 @@ async function advance() {
           tried: [...(paging?.tried ?? []), { method: "native_wheel", moved: native.moved, ...("reason" in native ? { reason: native.reason } : {}), ...("target_diagnostics" in native ? { target_diagnostics: native.target_diagnostics } : {}) }],
           ...("reason" in native ? { reason: native.reason } : {}),
         };
-        if (!native.moved) job.level_warnings = [...(job.level_warnings ?? []),
-          native.reason === "report_input_lease_required"
-            ? `${job.levels[job.index]}: เลื่อนแถวด้วย DOM ไม่ได้ เปิดเมาส์/คีย์บอร์ดรายงานใน popup แล้วเริ่มอ่านใหม่ ข้อมูลรอบนี้ยังไม่ครบ`
-            : `${job.levels[job.index]}: ไม่ยืนยันการเลื่อนแถว (${native.reason}) ข้อมูลรอบนี้ยังไม่ครบ`,
-        ];
+        if (!native.moved && native.reason !== "reporting_bottom_reached")
+          job.level_warnings = [...(job.level_warnings ?? []),
+            native.reason === "report_input_lease_required"
+              ? `${job.levels[job.index]}: เลื่อนแถวด้วย DOM ไม่ได้ เปิดเมาส์/คีย์บอร์ดรายงานใน popup แล้วเริ่มอ่านใหม่ ข้อมูลรอบนี้ยังไม่ครบ`
+              : `${job.levels[job.index]}: ไม่ยืนยันการเลื่อนแถว (${native.reason}) ข้อมูลรอบนี้ยังไม่ครบ`,
+          ];
       }
       job.scroll_log = [
         ...(job.scroll_log ?? []),
@@ -663,12 +692,24 @@ async function perform(message: any) {
         });
       await put(job);
       await applyReadZoom(job);
+      // Meta keeps the saved report columns in the current page instance.
+      // Navigating to the same report route again can reset that transient view.
+      const navigate = needsReportingNavigation(
+        startTab.url ?? "",
+        account,
+        levels[0],
+        job.breakdown_params,
+      );
       await chrome.tabs.update(tabId, {
-        url: reportingUrl(
-          account,
-          levels[0],
-          job.breakdown_params,
-        ).href,
+        ...(navigate
+          ? {
+              url: reportingUrl(
+                account,
+                levels[0],
+                job.breakdown_params,
+              ).href,
+            }
+          : {}),
         active: true,
       });
       await chrome.alarms.create("collect", { periodInMinutes: 0.5 });

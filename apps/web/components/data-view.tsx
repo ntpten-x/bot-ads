@@ -2,6 +2,7 @@
 import { useDeferredValue, useMemo, useState } from "react";
 import useSWR from "swr";
 import type { AdRecord, Api, Run } from "../lib/types";
+import { recordSource } from "../../../packages/core/src/analysis";
 import { exportRecordsCsv } from "../lib/export";
 import { download, number } from "../lib/utils";
 import { EmptyRow, Icon, Panel } from "./ui";
@@ -50,6 +51,16 @@ export default function DataView({
       ) ?? [],
     [data, level, from, to, search],
   );
+  const sourceLabels = {
+    csv: "CSV",
+    dom_capture: "DOM (lower bound)",
+    unknown: "ไม่ทราบแหล่ง",
+  } as const;
+  const sourceCounts = useMemo(() => {
+    const counts = { csv: 0, dom_capture: 0, unknown: 0 };
+    for (const record of records) counts[recordSource(record)]++;
+    return counts;
+  }, [records]);
   const pages = Math.max(1, Math.ceil(records.length / PAGE_SIZE)),
     current = Math.min(page, pages);
   const visible = records.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
@@ -128,6 +139,14 @@ export default function DataView({
         Spend ในแต่ละแถวอาจเป็นคนละช่วงเวลา Attribution และ Breakdown
         จึงไม่รวมยอดข้ามเงื่อนไข
       </div>
+      {data ? (
+        <p className="hint">
+          แหล่งข้อมูล: CSV {number(sourceCounts.csv)} แถว · DOM{" "}
+          {number(sourceCounts.dom_capture)} แถว (lower bound) · ไม่ทราบแหล่ง{" "}
+          {number(sourceCounts.unknown)} แถว. CSV ที่นำเข้าถูกกระทบยอดแล้วใช้เป็น
+          แหล่งยอดหลัก; ห้ามรวมยอดข้ามแหล่ง
+        </p>
+      ) : null}
       {error ? (
         <p className="notice-error" role="alert">
           {String(error.message)}
@@ -155,7 +174,10 @@ export default function DataView({
                     <strong>
                       {r.ad_name ?? r.ad_set_name ?? r.campaign_name}
                     </strong>
-                    <small>{r.ad_id ?? r.ad_set_id ?? r.campaign_id}</small>
+                    <small>
+                      {r.ad_id ?? r.ad_set_id ?? r.campaign_id} ·{" "}
+                      {sourceLabels[recordSource(r)]}
+                    </small>
                   </td>
                   <td>
                     {
@@ -228,6 +250,7 @@ export default function DataView({
                 JSON.stringify(
                   {
                     coverage: "unverified",
+                    source_counts: sourceCounts,
                     filters: { level, from, to, query },
                     records,
                   },

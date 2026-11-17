@@ -353,12 +353,57 @@ export default function ImportView({
                       : "แก้ข้อมูลตามรายการ แล้วตรวจสอบใหม่อีกครั้ง"}
                   </p>
                 </div>
+                {report.reconciliation ? (
+                  <div className="inline-note">
+                    <Icon
+                      name={
+                        report.reconciliation.verified ? "check" : "info"
+                      }
+                    />
+                    <span>
+                      <Pill
+                        kind={
+                          report.reconciliation.verified
+                            ? "success"
+                            : "warning"
+                        }
+                      >
+                        {report.reconciliation.status === "verified_for_import"
+                          ? "กระทบยอดไฟล์นี้แล้ว"
+                          : report.reconciliation.status === "mismatch"
+                            ? "ยอดที่ระบุไม่ตรงกับไฟล์"
+                            : "ยังไม่กระทบยอด"}
+                      </Pill>{" "}
+                      {report.reconciliation.status === "verified_for_import"
+                        ? "จำนวนแถวและ Spend ตรงกับที่ระบุสำหรับไฟล์นี้ แต่ยังไม่ยืนยันความครบทั้งบัญชี"
+                        : report.reconciliation.status === "mismatch"
+                          ? "แก้จำนวนแถวหรือ Spend รวมให้ตรงกับรายงานต้นทางก่อนบันทึก"
+                          : "ระบุจำนวนแถวและ Spend รวมเพื่อยืนยันขอบเขตของไฟล์นี้"}
+                    </span>
+                  </div>
+                ) : null}
                 <div className="quality-stats">
                   <div>
-                    แถวที่อ่านได้<strong>{number(report.summary.rows)}</strong>
+                    แถวที่อ่านได้
+                    <strong>{number(report.summary.rows)}</strong>
+                    <small>
+                      ต้นทาง{" "}
+                      {report.reconciliation?.rows.expected === null ||
+                      report.reconciliation?.rows.expected === undefined
+                        ? "ยังไม่ระบุ"
+                        : number(report.reconciliation.rows.expected)}
+                    </small>
                   </div>
                   <div>
-                    Spend ในไฟล์<strong>{number(report.summary.spend)}</strong>
+                    Spend ในไฟล์
+                    <strong>{number(report.summary.spend)}</strong>
+                    <small>
+                      ต้นทาง{" "}
+                      {report.reconciliation?.spend.expected === null ||
+                      report.reconciliation?.spend.expected === undefined
+                        ? "ยังไม่ระบุ"
+                        : number(report.reconciliation.spend.expected)}
+                    </small>
                   </div>
                 </div>
                 {report.errors.length ? (
@@ -387,7 +432,12 @@ export default function ImportView({
                       onClick={() =>
                         download(
                           JSON.stringify(
-                            { coverage: "unverified", records: report.records },
+                            {
+                              coverage: report.coverage,
+                              scope_coverage: report.scope_coverage,
+                              reconciliation: report.reconciliation,
+                              records: report.records,
+                            },
                             null,
                             2,
                           ),
@@ -465,7 +515,22 @@ export default function ImportView({
                     <td>{time(row.created_at)}</td>
                     <td>{number(row.row_count)}</td>
                     <td>
-                      <Pill kind="warning">ยังไม่ยืนยันทั้งบัญชี</Pill>
+                      {row.report.source === "dom_capture" ? (
+                        <>
+                          <Pill kind="neutral">DOM (lower bound)</Pill>
+                          <small>ยังไม่ยืนยันทั้งบัญชี</small>
+                        </>
+                      ) : row.report.reconciliation?.verified ? (
+                        <>
+                          <Pill kind="success">กระทบยอดไฟล์แล้ว</Pill>
+                          <small>ยังไม่ยืนยันทั้งบัญชี</small>
+                        </>
+                      ) : (
+                        <>
+                          <Pill kind="warning">ยังไม่กระทบยอด</Pill>
+                          <small>ยังไม่ยืนยันทั้งบัญชี</small>
+                        </>
+                      )}
                     </td>
                     <td>
                       <button

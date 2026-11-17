@@ -11,6 +11,7 @@ test("ads agent parses bounded goal and collection options", () => {
     maxSteps: 12,
     skipPrepare: false,
     skipNavigate: false,
+    scanColumns: true,
     collectionTimeoutMs: 300_000,
     breakdown: [],
     operator: {},
@@ -22,6 +23,7 @@ test("ads agent parses bounded goal and collection options", () => {
     "--timeout-seconds=45",
     "--skip-prepare",
     "--skip-navigate",
+    "--no-scan-columns",
     "--timezone=Asia/Bangkok",
     "--no-breakdown",
     "--no-filters",
@@ -32,6 +34,7 @@ test("ads agent parses bounded goal and collection options", () => {
   assert.equal(parsed.collectionTimeoutMs, 45_000);
   assert.equal(parsed.skipPrepare, true);
   assert.equal(parsed.skipNavigate, true);
+  assert.equal(parsed.scanColumns, false);
   assert.equal(parsed.operator.timezone, "Asia/Bangkok");
   assert.equal(parsed.operator.confirm_no_breakdown, true);
   assert.equal(parsed.operator.confirm_no_filters, true);

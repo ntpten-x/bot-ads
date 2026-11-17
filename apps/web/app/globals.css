@@ -1887,6 +1887,32 @@ td small {
   }
 }
 
+.analysis-context {
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 8px;
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+}
+.analysis-context h4 {
+  color: #536175;
+  font-size: 13px;
+  font-weight: 500;
+  margin: 0 0 10px;
+}
+.analysis-context .form-grid {
+  margin-top: 12px;
+}
+.analysis-context .checkbox-line {
+  align-items: flex-start;
+  display: flex;
+  gap: 8px;
+  line-height: 1.5;
+  margin-top: 8px;
+}
+.analysis-context .checkbox-line input[type="checkbox"] {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
 .capture-analysis-level {
   border-top: 1px solid var(--line, #e5e7eb);
   margin-top: 16px;

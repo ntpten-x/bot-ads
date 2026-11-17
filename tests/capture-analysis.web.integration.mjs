@@ -50,6 +50,20 @@ const analysis = analyzeCaptureJob([
     { header: "Ad", text: "Synthetic Ad" },
     { header: "Amount spent", text: "50" },
   ]),
+  (() => {
+    const partition = snapshot("2026-11-15T01:00:02Z", [
+      { header: "Ad", text: "Age Partition Ad" },
+      { header: "Age", text: "25–34" },
+      { header: "Results", text: "5\nMessages" },
+      { header: "Cost per result", text: "10" },
+      { header: "Amount spent", text: "50" },
+    ]);
+    partition.reported_total_rows = 40;
+    partition.row_observations[0].identity = "999";
+    partition.row_observations[0].identity_source = "row_link_href";
+    partition.row_observations[0].column_mapping = "semantic";
+    return partition;
+  })(),
 ]);
 const response = {
   ...analysis,
@@ -76,6 +90,11 @@ try {
   });
   const errors = [];
   const reviewPayloads = [];
+  const analysisUrls = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/captures/analysis"))
+      analysisUrls.push(request.url());
+  });
   const captures = [2, 3].map((n) => ({
     id: `00000000-0000-4000-8000-00000000000${n}`,
     job_id: response.job.id,
@@ -83,7 +102,7 @@ try {
     page: "/adsmanager/manage/ads",
     level: "ads",
     captured_at: "2026-11-15T01:00:00Z",
-    reader_version: "0.6.22",
+    reader_version: "0.6.41",
     coverage: "visible_only",
     column_alignment: "aligned",
     reporting_context: { currency: "THB", timezone: "unverified" },
@@ -162,6 +181,37 @@ try {
   await expect(
     page.getByText("ยังไม่มีอันดับที่ผ่านเกณฑ์", { exact: false }).first(),
   ).toBeVisible();
+  await expect(
+    page.getByText("ขั้นต่ำของกลุ่มนี้", { exact: false }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByText("ยังไม่ทราบจำนวนรวมของกลุ่มนี้", { exact: false }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByText("จาก 40", { exact: false }),
+  ).toHaveCount(0);
+  await page.getByLabel("เขตเวลา (IANA)").fill("Asia/Bangkok");
+  await page
+    .getByRole("checkbox", {
+      name: "ใช้เขตเวลานี้เป็นหลักฐานที่ผู้ใช้ยืนยัน",
+      exact: true,
+    })
+    .check();
+  await page
+    .getByRole("checkbox", {
+      name: "ยืนยันบริบท: ไม่มีตัวกรองรายงาน",
+      exact: true,
+    })
+    .check();
+  await expect
+    .poll(() =>
+      analysisUrls.some(
+        (url) =>
+          url.includes("timezone=Asia%2FBangkok") &&
+          url.includes("confirm_no_filters=true"),
+      ),
+    )
+    .toBe(true);
   await expect(
     page.getByText("Synthetic Ad", { exact: true }).first(),
   ).toBeVisible();

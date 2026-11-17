@@ -54,7 +54,13 @@ app.post("/analysis/preview", (req, res) => {
     res.status(422).json({ validation });
     return;
   }
-  res.json({ validation, analysis: buildAnalysis(validation.records, goal) });
+  res.json({
+    validation,
+    analysis: buildAnalysis(validation.records, goal, {
+      coverage: validation.scope_coverage,
+      reconciliation: validation.reconciliation,
+    }),
+  });
 });
 app.post("/imports", async (req, res) => {
   const result = await saveImport(importSchema.parse(req.body));

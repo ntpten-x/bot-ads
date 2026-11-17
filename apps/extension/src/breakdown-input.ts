@@ -241,8 +241,7 @@ export function probeBreakdownMenu(account: string): ProbeResult {
     menu_open: options.some((option) => option.visible),
     loading:
       [...document.querySelectorAll('[role="progressbar"],[aria-busy="true"]')]
-        .some(visible) ||
-      /กำลังโหลด|loading/i.test(text(document.body)),
+        .some(visible),
     ...(trigger ? { trigger } : {}),
     ...(search ? { search } : {}),
     options,
@@ -396,6 +395,56 @@ export async function configureBreakdownWithInput(
       );
     if (unsupported.length)
       throw new Error(`unsupported_active_breakdown:${unsupported.join(",")}`);
+    const activeDimensions = new Set<BreakdownDimension>();
+    for (const [param, value] of before.breakdown_params) {
+      const name = param.replace(/_breakdown$/i, "").toLowerCase();
+      if (name === "demographics") {
+        for (const part of value.split(",")) {
+          const dimension = part.trim().toLowerCase();
+          if (["age", "gender", "platform", "placement"].includes(dimension))
+            activeDimensions.add(dimension as BreakdownDimension);
+        }
+      } else if (["age", "gender", "platform", "placement"].includes(name))
+        activeDimensions.add(name as BreakdownDimension);
+    }
+    const requested = new Set(dimensions);
+    const alreadyApplied =
+      dimensions.every((dimension) => activeDimensions.has(dimension)) &&
+      [...activeDimensions].every((dimension) => requested.has(dimension));
+    if (alreadyApplied) {
+      await guard();
+      let menuAfter: boolean | null = before.menu_open;
+      if (before.menu_open) {
+        await chrome.debugger.attach(source, "1.3");
+        attached = true;
+        await chrome.debugger.sendCommand(source, "Input.dispatchKeyEvent", {
+          type: "rawKeyDown",
+          key: "Escape",
+          code: "Escape",
+          windowsVirtualKeyCode: 27,
+        });
+        await chrome.debugger.sendCommand(source, "Input.dispatchKeyEvent", {
+          type: "keyUp",
+          key: "Escape",
+          code: "Escape",
+          windowsVirtualKeyCode: 27,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        const after = await observe();
+        menuAfter = after?.ready ? after.menu_open : null;
+      }
+      return {
+        ok: true,
+        dimensions,
+        selected: [...dimensions],
+        cleared: [],
+        missing: [],
+        menu_open_after: menuAfter,
+        breakdown_params_before: before.breakdown_params,
+        breakdown_params_after: before.breakdown_params,
+        url_after: (await chrome.tabs.get(binding.tabId)).url ?? "",
+      };
+    }
     await guard();
     await chrome.debugger.attach(source, "1.3");
     attached = true;
@@ -427,6 +476,15 @@ export async function configureBreakdownWithInput(
       throw new Error("breakdown_dimensions_mutually_exclusive");
     for (const key of ["age", "gender", "platform", "placement"] as const) {
       let option = current.options.find((candidate) => candidate.key === key);
+      const wanted = dimensions.includes(key);
+      const activeByUrl = current.breakdown_params.some(
+        ([param, value]) =>
+          (param === "demographics_breakdown" && value === key) ||
+          (param === `${key}_breakdown` && !!value),
+      );
+      // Unrequested, inactive dimensions need no search or click. Searching
+      // every key kept the menu busy until breakdown_input_timeout.
+      if (!wanted && !activeByUrl && option?.checked !== true) continue;
       if (!option?.target && current.search) {
         const searched = await searchFor(current, queryFor(key));
         current = searched.current;
@@ -436,11 +494,6 @@ export async function configureBreakdownWithInput(
         if (dimensions.includes(key)) missing.push(key);
         continue;
       }
-      const wanted = dimensions.includes(key);
-      const activeByUrl = current.breakdown_params.some(
-        ([param, value]) =>
-          param === "demographics_breakdown" && value === key,
-      );
       if (wanted && activeByUrl) {
         selected.push(key);
         continue;

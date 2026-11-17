@@ -903,6 +903,116 @@ export function readVisibleTable() {
     const parents = [...geometryParents].sort((a, b) => a.center - b.center);
     const rowsByAge: Observation[] = [];
     const scope = geometryScope;
+    const maxHeaderWidth = Math.max(
+      ...observedHeaders.map((header) => header.rect.width),
+    );
+    const clippedRect = (element: Element) => {
+      const own = element.getBoundingClientRect();
+      let left = own.left,
+        right = own.right,
+        top = own.top,
+        bottom = own.bottom;
+      for (
+        let ancestor: Element | null = element.parentElement;
+        ancestor && ancestor !== scope.parentElement;
+        ancestor = ancestor.parentElement
+      ) {
+        const style = getComputedStyle(ancestor),
+          clip = ancestor.getBoundingClientRect();
+        if (["hidden", "auto", "scroll", "clip"].includes(style.overflowX)) {
+          left = Math.max(left, clip.left);
+          right = Math.min(right, clip.right);
+        }
+        if (["hidden", "auto", "scroll", "clip"].includes(style.overflowY)) {
+          top = Math.max(top, clip.top);
+          bottom = Math.min(bottom, clip.bottom);
+        }
+      }
+      return {
+        left,
+        right,
+        top,
+        bottom,
+        width: right - left,
+        height: bottom - top,
+      };
+    };
+    // Meta wraps multiline cells in several spans. A line can be painted over
+    // an adjacent header's x-range, so assign it to the nearest structural
+    // owner whose left edge belongs to one column. The owner's height keeps
+    // the grouping inside this Age row and prevents parent-row leakage.
+    const ownerFor = (
+      parent: Element,
+      rowTop: number,
+      rowBottom: number,
+    ):
+      | { element: Element; header: string; rect: ReturnType<typeof clippedRect> }
+      | null => {
+      let best:
+        | {
+            element: Element;
+            header: string;
+            rect: ReturnType<typeof clippedRect>;
+            score: number;
+          }
+        | null = null;
+      let ancestor: Element | null = parent;
+      for (let depth = 0; ancestor && ancestor !== scope && depth < 9; depth++) {
+        const rect = clippedRect(ancestor);
+        if (rect.width < 24 || rect.height < 10) {
+          ancestor = ancestor.parentElement;
+          continue;
+        }
+        // A row container is wider/taller than a cell; never use it to own text.
+        if (
+          rect.height > Math.max(96, (rowBottom - rowTop) * 2.5) ||
+          rect.width > Math.max(240, maxHeaderWidth * 2.4)
+        ) {
+          ancestor = ancestor.parentElement;
+          continue;
+        }
+        const leftMatches = observedHeaders.filter(
+          (header) =>
+            rect.left >= header.rect.left - 8 &&
+            rect.left <= header.rect.right + 8,
+        );
+        const oneLeft = leftMatches.length === 1 ? leftMatches[0] : null;
+        const contained = observedHeaders.filter(
+          (header) =>
+            rect.left >= header.rect.left - 2 &&
+            rect.right <= header.rect.right + 2,
+        );
+        const header =
+          oneLeft ?? (contained.length === 1 ? contained[0] : null);
+        if (!header) {
+          ancestor = ancestor.parentElement;
+          continue;
+        }
+        const role = (ancestor.getAttribute("role") ?? "").toLowerCase();
+        const structural =
+          role === "gridcell" ||
+          role === "cell" ||
+          role === "rowheader" ||
+          ancestor.tagName === "TD" ||
+          ancestor.tagName === "TH";
+        const score =
+          (structural ? 1000 : 0) +
+          rect.width +
+          (rect.height >= 16 ? 40 : 0) +
+          (Math.abs(rect.left - header.rect.left) <= 8 ? 80 : 0);
+        if (!best || score > best.score)
+          best = { element: ancestor, header: header.label, rect, score };
+        ancestor = ancestor.parentElement;
+      }
+      return best
+        ? { element: best.element, header: best.header, rect: best.rect }
+        : null;
+    };
+    const attributionPattern =
+      /^(?:attribution setting|การตั้งค่าการระบุที่มา|การตั้งค่าการระบุแหล่งที่มา)$/i;
+    const adSetNamePattern = /^(?:ad set name|ชื่อชุดโฆษณา)$/i;
+    const attributionFragment =
+      /^(?:การคลิกในช่วง|หรือการดูในช่วง|คอนเวอร์ชั่นทั้งหมด|7\s*วัน|1\s*วัน|click|view|all conversions|\d+\s*[- ]?\s*day.*)$/i;
     const parentWalker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
     while (parentWalker.nextNode()) {
       const node = parentWalker.currentNode;
@@ -927,8 +1037,17 @@ export function readVisibleTable() {
         continue;
       const top = tokenRect.top - 9;
       const bottom = tokenRect.bottom + 9;
-      const values = new Map<string, string[]>();
+      const rowTop = top;
+      const rowBottom = bottom;
+      const groups = new Map<
+        string,
+        {
+          header: string;
+          parts: { text: string; top: number; left: number; order: number }[];
+        }
+      >();
       const metricWalker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+      let textOrder = 0;
       while (metricWalker.nextNode()) {
         const metricNode = metricWalker.currentNode;
         if (metricNode === node) continue;
@@ -947,25 +1066,78 @@ export function readVisibleTable() {
         metricRange.selectNodeContents(metricNode);
         const rect = metricRange.getBoundingClientRect();
         const y = rect.top + rect.height / 2;
+        const owner = ownerFor(metricParent, rowTop, rowBottom);
         if (
           !rect.width ||
           !rect.height ||
-          y < top ||
-          y > bottom ||
           rect.left < 0 ||
           rect.right > innerWidth
         )
           continue;
-        const matchedHeaders = observedHeaders.filter(
-          (header) =>
-            rect.left >= header.rect.left - 2 &&
-            rect.right <= header.rect.right + 2,
-        );
-        if (matchedHeaders.length !== 1) continue;
-        const header = matchedHeaders[0].label;
-        const parts = values.get(header) ?? [];
-        parts.push(textValue);
-        values.set(header, parts);
+        let header: string | null = owner?.header ?? null;
+        if (owner) {
+          const ownerCenter = (owner.rect.top + owner.rect.bottom) / 2;
+          if (ownerCenter < rowTop || ownerCenter > rowBottom) continue;
+        } else {
+          if (y < top || y > bottom) continue;
+          const matchedHeaders = observedHeaders.filter(
+            (candidate) =>
+              rect.left >= candidate.rect.left - 2 &&
+              rect.right <= candidate.rect.right + 2,
+          );
+          if (matchedHeaders.length === 1) header = matchedHeaders[0].label;
+        }
+        if (!header) continue;
+        const key = owner
+          ? `owner:${observedHeaders.findIndex((candidate) => candidate.label === owner.header)}:${Math.round(owner.rect.left)}:${Math.round(owner.rect.top)}`
+          : `text:${header}`;
+        const group = groups.get(key) ?? { header, parts: [] };
+        group.parts.push({
+          text: norm(textValue),
+          top: rect.top,
+          left: rect.left,
+          order: textOrder++,
+        });
+        groups.set(key, group);
+      }
+      const values = new Map<string, string[]>();
+      for (const group of groups.values()) {
+        const lines = group.parts
+          .sort(
+            (a, b) =>
+              a.top - b.top || a.left - b.left || a.order - b.order,
+          )
+          .map((part) => part.text)
+          .filter(Boolean);
+        const unique = [...new Set(lines)];
+        if (!unique.length) continue;
+        values.set(group.header, [
+          ...(values.get(group.header) ?? []),
+          ...unique,
+        ]);
+      }
+      // Attribution is one multiline cell. A wrapped line can be painted over
+      // the next column's x-range; merge it back instead of treating it as an
+      // ad-set name or a separate reporting scope.
+      const attributionHeaders = [...values.keys()].filter((header) =>
+        attributionPattern.test(header.trim()),
+      );
+      for (const adSetHeader of [...values.keys()].filter((header) =>
+        adSetNamePattern.test(header.trim()),
+      )) {
+        const adSetLines = values.get(adSetHeader) ?? [];
+        if (
+          attributionHeaders.length === 1 &&
+          adSetLines.length &&
+          adSetLines.every((line) => attributionFragment.test(norm(line)))
+        ) {
+          const attributionHeader = attributionHeaders[0];
+          values.set(attributionHeader, [
+            ...(values.get(attributionHeader) ?? []),
+            ...adSetLines,
+          ]);
+        }
+        values.delete(adSetHeader);
       }
       const idCells = identityParent.cells.filter((cell) =>
         /^(?:id แคมเปญ|id ชุดโฆษณา|id โฆษณา|campaign id|ad set id|ad id)$/i.test(
@@ -1010,12 +1182,16 @@ export function readVisibleTable() {
         ...(resultType
           ? [{ header: "result_type", text: resultType }]
           : []),
+        ...identityParent.cells.filter((cell) =>
+          adSetNamePattern.test(cell.header.trim()),
+        ),
         ...[...values]
           .filter(
             ([header]) =>
               !idCells.some((cell) => cell.header === header) &&
               header !== statusCell?.header &&
-              !nameHeaderPattern.test(header),
+              !nameHeaderPattern.test(header) &&
+              !adSetNamePattern.test(header),
           )
           .map(([header, parts]) => ({
             header,
@@ -1054,7 +1230,7 @@ export function readVisibleTable() {
   }
   return {
     account_id: url.searchParams.get("act"),
-    reader_version: "0.6.22",
+    reader_version: "0.6.41",
     page: url.pathname,
     level,
     captured_at: new Date().toISOString(),
@@ -1312,6 +1488,79 @@ export async function waitForReportingRows(timeoutMs = 8000) {
 }
 
 /**
+ * Return reporting rows to the physical top of the table before a new capture
+ * level. A previous job may leave the virtualized body at its last page.
+ */
+export async function resetReportingRows() {
+  const settle = (ms: number) =>
+    new Promise<void>((r) => requestAnimationFrame(() => setTimeout(r, ms)));
+  const visible = (el: Element) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight;
+  };
+  const headers = [...document.querySelectorAll('[role="columnheader"],thead th')].filter(visible);
+  if (!headers.length) return { reset: false, reason: "no_headers", offsets: [] };
+  const headerBottom = Math.max(...headers.map((h) => h.getBoundingClientRect().bottom));
+  const rowMarkers = () =>
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        '[role="switch"],input[type="checkbox"],[role="checkbox"]',
+      ),
+    ]
+      .filter((el) => {
+        if (!visible(el) || el.closest('[role="columnheader"]')) return false;
+        const r = el.getBoundingClientRect();
+        const cy = r.top + r.height / 2;
+        if (cy <= headerBottom || r.bottom > innerHeight) return false;
+        for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+          if (getComputedStyle(a).overflowY === "visible") continue;
+          const clip = a.getBoundingClientRect();
+          if (cy < clip.top || cy > clip.bottom) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+  const markers = rowMarkers();
+  if (!markers.length) return { reset: false, reason: "no_rows", offsets: [] };
+  const seen = new Set<Element>();
+  const offsets: { from: number; to: number }[] = [];
+  for (const marker of markers) {
+    for (let a = marker.parentElement; a && a !== document.body; a = a.parentElement) {
+      if (seen.has(a) || headers.some((h) => a!.contains(h))) continue;
+      const style = getComputedStyle(a);
+      if (
+        a.scrollHeight <= a.clientHeight + 2 ||
+        !["auto", "scroll", "hidden"].includes(style.overflowY)
+      )
+        continue;
+      seen.add(a);
+      const from = a.scrollTop;
+      if (from > 0) a.scrollTop = 0;
+      offsets.push({ from, to: a.scrollTop });
+    }
+  }
+  if (offsets.some(({ from, to }) => from > to + 1)) await settle(350);
+  // Re-query after scrolling. The pre-reset markers can be detached or moved
+  // by virtualization; scrolling one of those back into view would undo the
+  // reset and leave the new job at the old bottom page.
+  const first = rowMarkers()[0];
+  const firstRect = first?.getBoundingClientRect();
+  if (
+    first &&
+    firstRect &&
+    (firstRect.top < headerBottom - 2 || firstRect.top > headerBottom + 120)
+  )
+    first.scrollIntoView({ block: "start", inline: "nearest" });
+  const changed = offsets.filter(({ from, to }) => from > to + 1).length;
+  return {
+    reset: changed > 0,
+    reason: changed > 0 ? null : "already_at_start",
+    changed,
+    offsets,
+  };
+}
+
+/**
  * Vertical paging that verifies movement. Tries, in order, every scrollable
  * ancestor of the last visible row, one wheel event over the rows, and
  * scrollIntoView of the last row. A step counts only when the visible rows
@@ -1350,36 +1599,78 @@ export async function scrollReportingRows() {
       .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
   // Compare row identities/name cells and actual body offsets, never metric
   // samples or page coordinates (a refresh/page nudge is not row paging).
-  const nameHeader = headers.find((h) => /^(ad|ad name|โฆษณา|ชื่อโฆษณา|ad set|ad set name|ชุดโฆษณา|ชื่อชุดโฆษณา|campaign|campaign name|แคมเปญ|ชื่อแคมเปญ)$/i.test((h.textContent ?? "").trim()));
   const level = location.pathname.replace(/\/$/, "").split("/").at(-1);
+  const headerText = (h: Element) =>
+    ((h as HTMLElement).innerText || h.textContent || "").trim();
+  const namePattern = level === "ads"
+    ? /^(ad|ad name|โฆษณา|ชื่อโฆษณา)$/i
+    : level === "adsets"
+      ? /^(ad set|ad set name|ชุดโฆษณา|ชื่อชุดโฆษณา)$/i
+      : /^(campaign|campaign name|แคมเปญ|ชื่อแคมเปญ)$/i;
+  const idPattern = level === "ads"
+    ? /^(ad id|id โฆษณา|รหัสโฆษณา)$/i
+    : level === "adsets"
+      ? /^(ad set id|id ชุดโฆษณา|รหัสชุดโฆษณา)$/i
+      : /^(campaign id|id แคมเปญ|รหัสแคมเปญ)$/i;
+  // Stable IDs are preferred. Names are only a fallback when the visible
+  // report omits an ID column.
+  const identityHeader = headers.find((h) => idPattern.test(headerText(h)));
+  const nameHeader = headers.find((h) => namePattern.test(headerText(h)));
+  const contentHeader = identityHeader ?? nameHeader;
+  const contentBand = contentHeader?.getBoundingClientRect();
+  const contentAt = (y: number) => {
+    if (!contentBand) return "";
+    const x = Math.min(
+      contentBand.right - 2,
+      Math.max(contentBand.left + 2, contentBand.left + 20),
+    );
+    const hits = document
+      .elementsFromPoint(x, y)
+      .filter((el) => {
+        if (!visible(el) || el.closest('input,textarea,button,[role="button"]'))
+          return false;
+        const r = el.getBoundingClientRect();
+        return r.left < contentBand.right && r.right > contentBand.left;
+      })
+      .sort(
+        (a, b) =>
+          a.getBoundingClientRect().width * a.getBoundingClientRect().height -
+          b.getBoundingClientRect().width * b.getBoundingClientRect().height,
+      );
+    for (const el of hits) {
+      const text = ((el as HTMLElement).innerText || el.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!text || text.length > 300) continue;
+      if (!identityHeader || /^\d+$/.test(text) || /\b\d{8,}\b/.test(text))
+        return text.slice(0, 250);
+    }
+    return "";
+  };
   const idParam = level === "ads" ? "selected_ad_ids" : level === "adsets" ? "selected_adset_ids" : "selected_campaign_ids";
   const signature = () => {
     const current = rows();
-    const band = nameHeader?.getBoundingClientRect();
-    const names = current.map((el, i) => {
+    const values = current.map((el, i) => {
       const r = el.getBoundingClientRect(), y = r.top + r.height / 2;
       const previous = current[i - 1]?.getBoundingClientRect(), next = current[i + 1]?.getBoundingClientRect();
       const low = previous ? (previous.top + previous.height / 2 + y) / 2 : y - 30;
       const high = next ? (next.top + next.height / 2 + y) / 2 : y + 30;
       const ids = new Set([...document.querySelectorAll<HTMLAnchorElement>('a[href]')].filter(visible).flatMap((a) => {
         const rect = a.getBoundingClientRect(), cy = rect.top + rect.height / 2;
-        if (!band || cy < low || cy >= high || rect.left + rect.width / 2 < band.left || rect.left + rect.width / 2 > band.right) return [];
+        if (!contentBand || cy < low || cy >= high || rect.left + rect.width / 2 < contentBand.left || rect.left + rect.width / 2 > contentBand.right) return [];
         const link = new URL(a.href, location.href), id = link.searchParams.get(idParam);
         return ["adsmanager.facebook.com", "business.facebook.com"].includes(link.hostname) && id && /^\d+$/.test(id) ? [id] : [];
       }));
       if (ids.size === 1) return `id:${[...ids][0]}`;
-      if (!band) return "";
-      const hit = document.elementFromPoint(Math.min(innerWidth - 2, Math.max(2, band.left + 20)), y);
-      const rect = hit?.getBoundingClientRect();
-      return rect && rect.left >= band.left - 2 && rect.right <= band.right + 2
-        ? `name:${(hit?.textContent ?? "").trim().slice(0, 250)}` : "";
+      const text = contentAt(y);
+      return text ? `${identityHeader ? "idcol" : "name"}:${text}` : "";
     });
     const offsets: number[] = [];
     for (let a = current[0]?.parentElement; a; a = a.parentElement) {
       if (a.scrollHeight > a.clientHeight + 2 && !headers.some((h) => a!.contains(h)) &&
         ["auto", "scroll", "hidden"].includes(getComputedStyle(a).overflowY)) offsets.push(a.scrollTop);
     }
-    return JSON.stringify({ names, offsets });
+    return { rows: current.length, values, offsets };
   };
   const anchors = rows();
   if (anchors.length < 2) return { moved: false, method: "none", tried, reason: "fewer_than_two_rows" };
@@ -1389,7 +1680,13 @@ export async function scrollReportingRows() {
     40,
     last.getBoundingClientRect().top - anchors[0].getBoundingClientRect().top,
   );
-  const changed = () => signature() !== before;
+  const changed = () => {
+    const after = signature();
+    const seen = new Set(before.values.filter(Boolean));
+    // Losing the last visible row at a clip edge is not a page. A row step
+    // must introduce at least one identity that was not already visible.
+    return after.values.some((value) => !!value && !seen.has(value));
+  };
   for (let a: Element | null = last.parentElement; a; a = a.parentElement) {
     const range = a.scrollHeight - a.clientHeight;
     if (range < 40) continue;
@@ -1519,20 +1816,23 @@ export function probeReportingScroll(account: string) {
     ? `id:${r.id}` : r.name ? `name:${r.name}` : "");
   if (!samples.some(Boolean))
     return unavailable("row_fingerprint_unavailable");
-  // Actual reporting-body offsets can verify a physical page with duplicate
-  // names. Metric text and arbitrary hit-test samples are deliberately absent.
-  const scrolls: number[] = [];
-  for (let a = rows[0].parentElement; a && a !== scope; a = a.parentElement) {
-    if (a.scrollHeight > a.clientHeight + 2 && !headers.some((h) => a!.contains(h)) &&
-      ["auto", "scroll", "hidden"].includes(getComputedStyle(a).overflowY)) scrolls.push(a.scrollTop);
-  }
+  // Paging is proven only by row count/identity changes. Body scroll_top is a
+  // diagnostic in target.body_offsets, never movement proof: a virtualized
+  // table can advance its offset while repainting the same last rows.
+  const fingerprint = (value: string) => {
+    let hash = 2166136261;
+    for (const c of value)
+      hash = Math.imul(hash ^ c.charCodeAt(0), 16777619);
+    return (hash >>> 0).toString(16);
+  };
+  const row_fingerprints = samples.map((sample) => sample ? fingerprint(sample) : "");
   let hash = 2166136261;
-  for (const c of JSON.stringify({ samples, scrolls })) hash = Math.imul(hash ^ c.charCodeAt(0), 16777619);
+  for (const c of JSON.stringify(samples)) hash = Math.imul(hash ^ c.charCodeAt(0), 16777619);
   const first = rows[0].getBoundingClientRect(), last = rows.at(-1)!.getBoundingClientRect();
   // The name cell may itself be an Edit button. Plan from visible column/row
   // interiors and hit-test each candidate; never weaken the control exclusion
   // just because the first point is blocked. At most 24 local observations.
-  type ColumnKind = "metric" | "identity" | "name" | "legacy";
+  type ColumnKind = "metric" | "identity" | "name" | "legacy" | "body";
   const stickyColumn = (header: Element) => {
     for (let a: Element | null = header; a && a !== scope; a = a.parentElement) {
       const style = getComputedStyle(a);
@@ -1540,23 +1840,197 @@ export function probeReportingScroll(account: string) {
     }
     return false;
   };
-  const columnBands = headers.filter((h) => !h.querySelector('input,[role="checkbox"],[role="switch"]') &&
-    !/^(?:on\s*\/\s*off|off\s*\/\s*on|ปิด\s*\/\s*เปิด|เปิด\s*\/\s*ปิด|select all|เลือกทั้งหมด)$/i.test(label(h)))
-    .map((h) => ({ rect: h.getBoundingClientRect(), sticky: stickyColumn(h), column_kind: (namePattern.test(label(h)) ? "name" : idPattern.test(label(h)) ? "identity" : "metric") as ColumnKind }))
+  const columnBands = headers.filter((h) => !h.querySelector('input,[role="checkbox"],[role="switch"]'))
+    .map((h) => ({ rect: h.getBoundingClientRect(), sticky: stickyColumn(h), column_kind: (namePattern.test(label(h)) ? "name" : idPattern.test(label(h)) ? "identity" : /^(?:on\s*\/\s*off|off\s*\/\s*on|ปิด\s*\/\s*เปิด|เปิด\s*\/\s*ปิด|select all|เลือกทั้งหมด)$/i.test(label(h)) ? "legacy" : "metric") as ColumnKind }))
     .filter(({rect}) => Math.min(innerWidth - 2, rect.right) - Math.max(2, rect.left) > 12)
     .sort((a,b) => a.rect.left - b.rect.left)
     .filter((band,i,all)=>all.findIndex((other)=>Math.abs(other.rect.left-band.rect.left)<2 && Math.abs(other.rect.right-band.rect.right)<2)===i)
     .map((band, band_index) => ({ ...band, band_index }))
     .sort((a,b) => Number(a.sticky) - Number(b.sticky) ||
-      ({metric:0,identity:1,name:2,legacy:3}[a.column_kind] - {metric:0,identity:1,name:2,legacy:3}[b.column_kind]) ||
+      ({metric:0,identity:1,name:2,legacy:3,body:4}[a.column_kind] - {metric:0,identity:1,name:2,legacy:3,body:4}[b.column_kind]) ||
       b.rect.left - a.rect.left);
   const ys = [...new Set([centers[Math.floor(centers.length / 2)], centers[0], centers.at(-1)!])]
     .filter((y) => y > bottom + 2 && y < innerHeight - 2);
-  const rejected: { tag: string; role: string; reason: string }[] = [];
+  const rejected: { tag: string; role: string; reason: string | null }[] = [];
   let attempts = 0;
-  const targets: { x: number; y: number; column_kind: ColumnKind; band_index: number; body_offsets:{scroll_top:number;client_height:number;scroll_height:number}[] }[] = [];
+  const targets: {
+    x: number;
+    y: number;
+    column_kind: ColumnKind;
+    band_index: number;
+    reveal_only?: boolean;
+    body_offsets: {
+      tag: string;
+      role: string | null;
+      overflow_y: string;
+      scroll_top: number;
+      client_height: number;
+      scroll_height: number;
+      at_top: boolean;
+      at_bottom: boolean;
+      contains_headers: boolean;
+      contains_rows: boolean;
+    }[];
+  }[] = [];
+  // Meta leaves a small gutter below a scrollbar thumb and can sub-pixel-round
+  // native scroll offsets. Keep the tolerance bounded so a near-bottom view is
+  // recognized without treating an arbitrary partial page as the end.
+  const scrollEdgeTolerance = 8;
+  const collectBodyOffsets = (hit: Element): (typeof targets)[number]["body_offsets"] => {
+    const body_offsets: (typeof targets)[number]["body_offsets"] = [];
+    for (let a: Element | null = hit; a && a !== document.documentElement; a = a.parentElement) {
+      if (body_offsets.length >= 6) break;
+      const style = getComputedStyle(a);
+      if (a.scrollHeight > a.clientHeight + 2 &&
+        ["auto", "scroll", "hidden", "clip"].includes(style.overflowY))
+        body_offsets.push({
+          tag: /^(?:div|section|main|article|aside|ul|ol|table|tbody|body)$/.test(a.tagName.toLowerCase())
+            ? a.tagName.toLowerCase()
+            : "other",
+          role: /^(?:grid|treegrid|rowgroup|list|region|table|none|presentation)$/.test(a.getAttribute("role") ?? "")
+            ? a.getAttribute("role")
+            : (a.getAttribute("role") ? "other" : null),
+          overflow_y: style.overflowY,
+          scroll_top: a.scrollTop,
+          client_height: a.clientHeight,
+          scroll_height: a.scrollHeight,
+          at_top: a.scrollTop <= scrollEdgeTolerance,
+          at_bottom: a.scrollTop + a.clientHeight >= a.scrollHeight - scrollEdgeTolerance,
+          contains_headers: headers.some((h) => a!.contains(h)),
+          contains_rows: rows.some((row) => a!.contains(row)),
+        });
+    }
+    return body_offsets;
+  };
+  const scopeRect = scope.getBoundingClientRect();
+  const strictBlocked = (hit: Element | null) =>
+    hit?.closest('[role="dialog"],input,textarea,select,button,[role="button"],a[href],[role="link"],[role="switch"],[role="checkbox"],[role="radio"],[contenteditable="true"]');
+  let body_target_count = 0;
+  const pushBodyTarget = (x: number, y: number, revealOnly = false) => {
+    if (targets.length >= 10 || attempts >= 60) return false;
+    if (targets.some((target) => Math.abs(target.x - x) < 2 && Math.abs(target.y - y) < 2)) return false;
+    attempts++;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || !scope.contains(hit) || strictBlocked(hit)) return false;
+    targets.push({
+      x,
+      y,
+      column_kind: "body",
+      band_index: columnBands.length + body_target_count++,
+      body_offsets: collectBodyOffsets(hit),
+      ...(revealOnly ? { reveal_only: true } : {}),
+    });
+    return true;
+  };
+  const visibleScrollbars = [...document.querySelectorAll('[role="scrollbar"]')]
+    .filter(visible)
+    .filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width >= 4 && r.right > 0 && r.left < innerWidth && r.bottom > bottom && r.top < innerHeight;
+    })
+    .slice(0, 2);
+  // Meta's virtualized grid uses a custom right-edge scrollbar that has no
+  // scrollbar role and is not an ancestor of the rows. Its track is a narrow,
+  // tall element; the thumb may be the same node or a nested child. Detect it
+  // from local geometry and expose one bounded drag target under the same lease.
+  const rightEdge = Math.min(scopeRect.right, innerWidth);
+  // Meta's custom scrollbar can be a sibling of the grid scope rather than a
+  // descendant of the common header/row ancestor. Search the nearest reporting
+  // ancestors too, while keeping the same narrow right-edge geometry filter.
+  const scrollbarRoots = new Set<Element>();
+  for (
+    let root: Element | null = scope;
+    root && root !== document.body && scrollbarRoots.size < 4;
+    root = root.parentElement
+  )
+    scrollbarRoots.add(root);
+  const scrollbarElements = new Set<HTMLElement>();
+  for (const root of scrollbarRoots)
+    for (const element of root.querySelectorAll<HTMLElement>(
+      '[role="scrollbar"],[tabindex],div',
+    ))
+      scrollbarElements.add(element);
+  const scrollbarTracks = [...scrollbarElements]
+    .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+    .filter(({ element, rect }) =>
+      rect.width >= 4 && rect.width <= 28 && rect.height >= 80 &&
+      rect.left >= scopeRect.left && rect.right <= innerWidth + 2 &&
+      rect.right >= rightEdge - 120 && rect.top >= bottom - 8 &&
+      rect.bottom <= innerHeight + 2 &&
+      !strictBlocked(element) &&
+      !headers.some((header) => element.contains(header)) &&
+      !rows.some((row) => element.contains(row)))
+    .sort((a, b) => b.rect.height - a.rect.height || b.rect.right - a.rect.right)
+    .slice(0, 2);
+  const vertical_scrollbar = scrollbarTracks.map(({ element, rect }) => {
+    const thumb = [...element.querySelectorAll<HTMLElement>('*')]
+      .map((child) => ({ child, rect: child.getBoundingClientRect() }))
+      .filter(({ rect: thumbRect }) =>
+        thumbRect.width >= 4 && thumbRect.width <= rect.width + 2 &&
+        thumbRect.height >= 20 && thumbRect.height < rect.height - 4 &&
+        thumbRect.right >= rect.right - 4 && thumbRect.left <= rect.left + 4)
+      .sort((a, b) => b.rect.height - a.rect.height)[0];
+    const thumbRect = thumb?.rect ?? rect;
+    const x = Math.min(innerWidth - 2, Math.max(2, Math.round(thumbRect.left + thumbRect.width / 2)));
+    const y = Math.min(innerHeight - 3, Math.max(bottom + 2, Math.round(thumbRect.top + Math.min(thumbRect.height / 2, 48))));
+    const drag_y = Math.min(
+      innerHeight - 3,
+      rect.bottom - 2,
+      y + Math.max(80, Math.min(320, Math.round(rect.height * 0.55))),
+    );
+    return {
+      x,
+      y,
+      drag_y,
+      track_top: Math.round(rect.top),
+      thumb_top: Math.round(thumbRect.top),
+      track_height: Math.round(rect.height),
+      thumb_height: Math.round(thumbRect.height),
+      has_nested_thumb: !!thumb,
+      at_top: thumbRect.top <= rect.top + scrollEdgeTolerance,
+      at_bottom: thumbRect.bottom >= rect.bottom - scrollEdgeTolerance,
+    };
+  }).find(({ x, y }) => {
+    const hit = document.elementFromPoint(x, y);
+    return (
+      !!hit &&
+      [...scrollbarRoots].some((root) => root.contains(hit)) &&
+      !strictBlocked(hit)
+    );
+  });
+  // A custom scrollbar can be the only paging owner even when every metric
+  // column ignores the wheel. Probe it before metric bands consume the target
+  // budget; otherwise a 14-column report never reaches the scrollbar.
+  for (const bar of visibleScrollbars) {
+    if (targets.length >= 10 || attempts >= 60) break;
+    const r = bar.getBoundingClientRect();
+    const x = Math.min(innerWidth - 2, Math.max(2, r.left + r.width / 2));
+    const barYs = [
+      r.top + r.height / 2,
+      r.top + r.height * 0.25,
+      r.top + r.height * 0.75,
+    ].filter((y) => y > bottom + 2 && y < innerHeight - 2);
+    for (const y of barYs) if (pushBodyTarget(x, y)) break;
+  }
+  // The grid may be wider than the viewport. Derive the gutter from the
+  // visible right edge, not the off-screen scope right edge.
+  const visibleRight = Math.min(scopeRect.right, innerWidth);
+  const gutterXs = [
+    visibleRight - 2,
+    visibleRight - 6,
+    visibleRight - 12,
+    visibleRight - 24,
+    scopeRect.right - 8,
+  ]
+    .filter((x, index, all) =>
+      x > Math.max(2, scopeRect.left + 8) && x < innerWidth - 2 && all.indexOf(x) === index,
+    );
+  for (const x of gutterXs) {
+    if (targets.length >= 10 || attempts >= 60) break;
+    for (const y of ys) if (pushBodyTarget(x, y, true)) break;
+  }
   for (const band of columnBands) {
-    if (targets.length >= 4 || attempts >= 24) break;
+    if (targets.length >= 10 || attempts >= 60) break;
     const left = Math.max(2, band.rect.left), right = Math.min(innerWidth - 2, band.rect.right);
     const center = (left + right) / 2;
     // Distinct columns are distinct wheel-routing opportunities. A frozen safe
@@ -1566,19 +2040,13 @@ export function probeReportingScroll(account: string) {
     let found = false;
     for (const x of xs) {
       for (const y of ys) {
-      if (attempts >= 24) break;
+      if (attempts >= 60) break;
       attempts++;
       const hit = document.elementFromPoint(x, y);
       const blocked = hit?.closest('[role="dialog"],input,textarea,select,button,[role="button"],a[href],[role="link"],[role="switch"],[role="checkbox"],[role="radio"],[contenteditable="true"]');
       const reason = !hit ? "no_hit" : !scope.contains(hit) ? "outside_reporting_scope" : blocked ? "interactive_control" : null;
-      if (!reason) {
-        const body_offsets:{scroll_top:number;client_height:number;scroll_height:number}[]=[];
-        for(let a:Element|null=hit;a&&a!==scope;a=a.parentElement){
-          if(body_offsets.length>=6)break;
-          if(!headers.some(h=>a!.contains(h))&&a.scrollHeight>a.clientHeight+2&&
-            ["auto","scroll","hidden"].includes(getComputedStyle(a).overflowY))
-            body_offsets.push({scroll_top:a.scrollTop,client_height:a.clientHeight,scroll_height:a.scrollHeight});
-        }
+      if (hit && !blocked && scope.contains(hit)) {
+        const body_offsets = collectBodyOffsets(hit);
         targets.push({ x, y, column_kind: band.column_kind, band_index: band.band_index, body_offsets });
         found = true;
         break;
@@ -1593,12 +2061,63 @@ export function probeReportingScroll(account: string) {
         });
       }
       }
-      if (found || attempts >= 24) break;
+      if (found || attempts >= 60) break;
     }
   }
   const target_diagnostics = {
     candidate_count: attempts, rejected, planned_targets: targets.length,
+    scroll_diagnostics: {
+      scope_rect: {
+        x: Math.round(scopeRect.left), y: Math.round(scopeRect.top),
+        width: Math.round(scopeRect.width), height: Math.round(scopeRect.height),
+      },
+      visible_right: Math.round(visibleRight),
+      scrollbar_count: visibleScrollbars.length,
+      scrollbars: visibleScrollbars.map((bar) => {
+        const r = bar.getBoundingClientRect();
+        return {
+          tag: bar.tagName.toLowerCase(),
+          orientation: bar.getAttribute("aria-orientation"),
+          x: Math.round(r.left), y: Math.round(r.top),
+          width: Math.round(r.width), height: Math.round(r.height),
+        };
+      }),
+      body_targets: targets.filter((target) => target.column_kind === "body").length,
+      vertical_scrollbar_candidates: scrollbarTracks.map(({ rect }) => ({
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        right: Math.round(rect.right),
+      })),
+      vertical_scrollbar: vertical_scrollbar ?? null,
+    },
     safe_bands: targets.map(({column_kind,band_index}) => ({column_kind,band_index})),
+    targets: targets.map(({ column_kind, band_index, body_offsets, reveal_only }) => ({
+      column_kind,
+      band_index,
+      ...(reveal_only ? { reveal_only: true } : {}),
+      body_offsets: body_offsets.map(
+        ({ tag, role, overflow_y, scroll_top, client_height, scroll_height, at_top, at_bottom, contains_headers, contains_rows }) => ({
+          tag,
+          role,
+          overflow_y,
+          scroll_top,
+          client_height,
+          scroll_height,
+          at_top,
+          at_bottom,
+          contains_headers,
+          contains_rows,
+        }),
+      ),
+    })),
+    at_bottom:
+      vertical_scrollbar?.at_bottom === true ||
+      targets.some((target) =>
+        target.body_offsets.some(
+          (offset) =>
+            offset.scroll_height > offset.client_height + 2 && offset.at_bottom,
+        ),
+      ),
   };
   if (!targets.length) return { ...unavailable("reporting_target_occluded"), target_diagnostics };
   const horizontalCandidates = new Set<HTMLElement>(
@@ -1639,11 +2158,13 @@ export function probeReportingScroll(account: string) {
     });
   return {
     ready: true as const, signature: `${rows.length}:${hash >>> 0}`, rows: rows.length,
+    row_fingerprints,
     x: targets[0].x, y: targets[0].y, targets,
     deltaY: Math.min(600, Math.max(40, last.top - first.top)),
     deltaX: Math.min(600, Math.max(180, Math.round(innerWidth * 0.45))),
     horizontal_offsets,
     header_projection,
+    vertical_scrollbar: vertical_scrollbar ?? null,
     horizontal_signature: JSON.stringify({
       offsets: horizontal_offsets.map((offset) => offset.scroll_left),
       headers: header_projection,

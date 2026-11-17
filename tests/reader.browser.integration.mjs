@@ -88,7 +88,7 @@ try {
       .join("")}
     <input type="password" value="never-export" style="position:absolute;left:810px;top:65px">
   </div>`);
-  expect(geometry.reader_version).toBe("0.6.22");
+  expect(geometry.reader_version).toBe("0.6.41");
   expect(geometry.row_observations).toHaveLength(2);
   expect(geometry.row_observations.map((r) => r.name)).toEqual([
     "Same ad name",
@@ -157,6 +157,53 @@ try {
       ),
     ),
   ).toBe(true);
+  const ageAttribution = await read(
+    `<div id="report" style="position:relative;width:1000px;height:420px;font-size:9px;line-height:9px">
+    <div role="columnheader" style="position:absolute;left:0;top:0;width:40px;height:40px">On / Off</div>
+    <div role="columnheader" style="position:absolute;left:40px;top:0;width:260px;height:40px">โฆษณา</div>
+    <div role="columnheader" style="position:absolute;left:300px;top:0;width:160px;height:40px">จำนวนเงินที่ใช้จ่ายไป</div>
+    <div role="columnheader" style="position:absolute;left:460px;top:0;width:140px;height:40px">อิมเพรสชัน</div>
+    <div role="columnheader" style="position:absolute;left:600px;top:0;width:120px;height:40px">ผลลัพธ์</div>
+    <div role="columnheader" style="position:absolute;left:720px;top:0;width:140px;height:40px">การตั้งค่าการระบุที่มา</div>
+    <div role="columnheader" style="position:absolute;left:860px;top:0;width:140px;height:40px">ชื่อชุดโฆษณา</div>
+    <input type="checkbox" style="position:absolute;left:10px;top:60px">
+    <a href="https://adsmanager.facebook.com/adsmanager/manage/ads/edit?act=123456789&selected_campaign_ids=111&selected_adset_ids=222&selected_ad_ids=333" style="position:absolute;left:50px;top:56px">Multiline attribution ad</a>
+    <div style="position:absolute;left:310px;top:56px">฿100.00</div><div style="position:absolute;left:470px;top:56px">1,000</div><div style="position:absolute;left:610px;top:56px">10 msg</div>
+    <div style="position:absolute;left:870px;top:56px">Parent ad set</div>
+    <div style="position:absolute;left:50px;top:100px">18–24</div><div style="position:absolute;left:310px;top:100px">฿40.00</div><div style="position:absolute;left:470px;top:100px">400</div><div style="position:absolute;left:610px;top:100px">4</div>
+    <div class="attribution-cell" style="position:absolute;left:730px;top:90px;width:240px;height:30px">
+      <span style="position:absolute;left:0;top:0">การคลิกในช่วง</span>
+      <span style="position:absolute;left:0;top:6px">7 วัน</span>
+      <span style="position:absolute;left:170px;top:12px">หรือการดูในช่วง</span>
+      <span style="position:absolute;left:170px;top:18px">1 วัน</span>
+      <span style="position:absolute;left:0;top:24px">คอนเวอร์ชั่นทั้งหมด</span>
+    </div>
+    <div style="position:absolute;left:50px;top:140px">25–34</div><div style="position:absolute;left:310px;top:140px">฿60.00</div><div style="position:absolute;left:470px;top:140px">600</div><div style="position:absolute;left:610px;top:140px">6</div>
+    <div class="attribution-cell" style="position:absolute;left:730px;top:130px;width:240px;height:30px">
+      <span style="position:absolute;left:0;top:0">การคลิกในช่วง</span>
+      <span style="position:absolute;left:0;top:6px">7 วัน</span>
+      <span style="position:absolute;left:170px;top:12px">หรือการดูในช่วง</span>
+      <span style="position:absolute;left:170px;top:18px">1 วัน</span>
+      <span style="position:absolute;left:0;top:24px">คอนเวอร์ชั่นทั้งหมด</span>
+    </div>
+  </div>`,
+    "/adsmanager/manage/ads",
+    undefined,
+    "&demographics_breakdown=age",
+  );
+  expect(ageAttribution.row_observations).toHaveLength(2);
+  for (const row of ageAttribution.row_observations) {
+    const attribution = row.cells.find(
+      (cell) => cell.header === "การตั้งค่าการระบุที่มา",
+    )?.text;
+    expect(attribution).toContain("การคลิกในช่วง");
+    expect(attribution).toContain("หรือการดูในช่วง");
+    expect(attribution).toContain("1 วัน");
+    expect(attribution).toContain("คอนเวอร์ชั่นทั้งหมด");
+    expect(
+      row.cells.find((cell) => cell.header === "ชื่อชุดโฆษณา")?.text,
+    ).toBe("Parent ad set");
+  }
   const scrolling =
     await read(`<div id="scroller" style="width:500px;height:150px;overflow:auto"><div style="width:1400px;height:600px">
     <div role="columnheader" style="width:200px;height:40px">Ad</div><div role="columnheader" style="width:200px;height:40px">Spend</div>
@@ -298,7 +345,7 @@ try {
     </div>
   </div>`;
   const live = await read(liveShaped);
-  expect(live.reader_version).toBe("0.6.22");
+  expect(live.reader_version).toBe("0.6.41");
   expect(live.row_observations.map((r) => r.name)).toEqual(["Fixture 0", "Fixture 1", "Fixture 2", "Fixture 3"]);
   expect(live.row_observations[0].cells.find((c) => c.header === "แคมเปญ").text).toBe("Fixture 0");
   expect(live.row_observations[3].cells.find((c) => c.header === "แคมเปญ").text).toBe("Fixture 3");
@@ -350,6 +397,11 @@ try {
     () => {
       document.querySelector("#vb").addEventListener("wheel", (e) => {
         document.querySelector("#vc").style.transform = `translateY(-${e.deltaY}px)`;
+        // Virtualized paging must introduce row identities that were not
+        // visible before; merely moving the existing rows is not a page.
+        document.querySelector("#vc").innerHTML = [4, 5, 6, 7]
+          .map((i) => `<div role="switch" style="position:absolute;left:10px;top:${(i - 4) * 50 + 10}px;width:40px;height:20px"></div><div style="position:absolute;left:110px;top:${(i - 4) * 50 + 8}px;width:280px">Virtual ${i}</div>`)
+          .join("");
       });
     },
   );
@@ -391,9 +443,31 @@ try {
   await read(nativeTargets, "/adsmanager/manage/ads");
   const targetPlan = await page.evaluate(() => ReaderFixture.probeReportingScroll("123456789"));
   expect(targetPlan.ready, JSON.stringify(targetPlan)).toBe(true);
-  expect(targetPlan.x).toBeGreaterThan(400);
-  expect(targetPlan.x).toBeLessThan(620);
-  expect(await page.evaluate(({x,y})=>document.elementFromPoint(x,y).classList.contains('safe-metric'),targetPlan)).toBe(true);
+  const metricTarget = targetPlan.targets.find((target) => target.column_kind === "metric");
+  expect(metricTarget, JSON.stringify(targetPlan)).toBeTruthy();
+  expect(metricTarget.x).toBeGreaterThan(400);
+  expect(metricTarget.x).toBeLessThan(620);
+  expect(await page.evaluate(({x,y})=>document.elementFromPoint(x,y).classList.contains('safe-metric'),metricTarget)).toBe(true);
+  // A wide grid can fill every column band while the only pager is the visible
+  // right-edge scrollbar. Scrollbar/gutter targets must win the bounded budget.
+  const gutterTargets = `<div id="gutter-report" style="position:relative;width:1600px;height:260px">
+    <div role="columnheader" style="position:absolute;left:0;top:0;width:80px;height:40px">On / Off</div>
+    <div role="columnheader" style="position:absolute;left:80px;top:0;width:300px;height:40px">Ad</div>
+    ${Array.from({ length: 12 }, (_, i) => `<div role="columnheader" style="position:absolute;left:${400 + i * 95}px;top:0;width:80px;height:40px">Metric ${i}</div>`).join("")}
+    <div style="position:absolute;left:0;top:40px;width:1600px;height:200px">
+      ${[0, 1, 2].map((i) => `<div role="switch" style="position:absolute;left:10px;top:${20 + i * 50}px;width:40px;height:20px"></div>
+      <a href="/adsmanager/manage/ads?act=123456789&selected_ad_ids=88${i}" style="position:absolute;left:90px;top:${15 + i * 50}px;width:280px;height:30px">Gutter ${i}</a>
+      ${Array.from({ length: 12 }, (_, j) => `<div style="position:absolute;left:${410 + j * 95}px;top:${15 + i * 50}px;width:70px;height:30px">${j}</div>`).join("")}`).join("")}
+    </div>
+    <div role="scrollbar" aria-orientation="vertical" style="position:fixed;left:980px;top:60px;width:15px;height:180px;background:#ddd"><div style="height:60px;background:#888"></div></div>
+  </div>`;
+  await read(gutterTargets, "/adsmanager/manage/ads");
+  const gutterPlan = await page.evaluate(() => ReaderFixture.probeReportingScroll("123456789"));
+  expect(gutterPlan.ready, JSON.stringify(gutterPlan)).toBe(true);
+  expect(gutterPlan.targets.some((target) => target.column_kind === "body"), JSON.stringify(gutterPlan)).toBe(true);
+  expect(gutterPlan.target_diagnostics.scroll_diagnostics.scrollbar_count).toBe(1);
+  expect(gutterPlan.targets.length).toBeLessThanOrEqual(10);
+  await read(nativeTargets, "/adsmanager/manage/ads");
   await page.evaluate(() => {
     const blocker=document.createElement('button');blocker.style.cssText='position:absolute;left:0;top:40px;width:900px;height:190px;z-index:10';blocker.textContent='Edit ad';
     document.querySelector('#native-report').append(blocker);
@@ -430,11 +504,13 @@ try {
   await expect(page.locator('.names').first()).toHaveText('Fixture 0');
   const splitBodyPlan = await page.evaluate(() => ReaderFixture.probeReportingScroll("123456789"));
   expect(splitBodyPlan.ready, JSON.stringify(splitBodyPlan)).toBe(true);
-  expect(splitBodyPlan.x).toBeGreaterThan(400);
   expect(splitBodyPlan.targets.length).toBeGreaterThanOrEqual(2);
-  expect(splitBodyPlan.targets.length).toBeLessThanOrEqual(4);
+  expect(splitBodyPlan.targets.length).toBeLessThanOrEqual(10);
   expect(new Set(splitBodyPlan.targets.map(t=>t.band_index)).size).toBe(splitBodyPlan.targets.length);
-  await page.mouse.move(splitBodyPlan.x, splitBodyPlan.y);
+  const splitMetric = splitBodyPlan.targets.find((target) => target.column_kind === "metric");
+  expect(splitMetric, JSON.stringify(splitBodyPlan)).toBeTruthy();
+  expect(splitMetric.x).toBeGreaterThan(400);
+  await page.mouse.move(splitMetric.x, splitMetric.y);
   await page.mouse.wheel(0, 80);
   await expect(page.locator('.names').first()).toHaveText('Next 0');
   const afterSplitBody = await page.evaluate(() => ReaderFixture.probeReportingScroll("123456789"));
@@ -448,12 +524,31 @@ try {
     unrelated.innerHTML='<div style="height:1400px">Other panel</div>';document.body.append(unrelated);
   });
   const withBodyOffsets=await page.evaluate(()=>ReaderFixture.probeReportingScroll('123456789'));
-  expect(withBodyOffsets.targets[0].body_offsets).toEqual([{scroll_top:0,client_height:190,scroll_height:1000}]);
+  expect(withBodyOffsets.targets[0].body_offsets).toMatchObject([{scroll_top:0,client_height:190,scroll_height:1000,at_top:true,at_bottom:false}]);
   expect(withBodyOffsets.targets.find(t=>t.column_kind==='name').body_offsets).toEqual([]);
   await page.evaluate(()=>{document.getElementById('metric-body').scrollTop=60;});
   const scrolledBodyOffsets=await page.evaluate(()=>ReaderFixture.probeReportingScroll('123456789'));
   expect(scrolledBodyOffsets.signature).toBe(withBodyOffsets.signature);
-  expect(scrolledBodyOffsets.targets[0].body_offsets).toEqual([{scroll_top:60,client_height:190,scroll_height:1000}]);
+  expect(scrolledBodyOffsets.targets[0].body_offsets).toMatchObject([{scroll_top:60,client_height:190,scroll_height:1000,at_top:false,at_bottom:false}]);
+  await read(`<div style="position:relative;width:900px;height:260px">
+    <div role="columnheader" style="position:absolute;left:0;top:0;width:80px;height:40px">On / Off</div>
+    <div role="columnheader" style="position:absolute;left:80px;top:0;width:420px;height:40px">Ad</div>
+    <div role="columnheader" style="position:absolute;left:500px;top:0;width:180px;height:40px">Ad ID</div>
+    <div id="custom-body" style="position:absolute;top:40px;left:0;width:900px;height:200px;overflow:hidden">
+      ${Array.from({length:4},(_,i)=>`<div role="switch" style="position:absolute;left:10px;top:${20+i*40}px;width:40px;height:24px"></div><a href="/adsmanager/manage/ads?act=123456789&selected_ad_ids=88${i}" style="position:absolute;left:90px;top:${20+i*40}px;width:400px;height:24px">Custom ${i}</a><div style="position:absolute;left:510px;top:${20+i*40}px;width:160px;height:24px">88${i}</div>`).join('')}
+    </div>
+    <div id="custom-track" style="position:absolute;left:886px;top:48px;width:12px;height:190px;background:#ddd">
+      <div id="custom-thumb" style="position:absolute;left:1px;top:8px;width:10px;height:54px;background:#777"></div>
+    </div>
+  </div>`, "/adsmanager/manage/ads");
+  const customScrollbarProbe = await page.evaluate(() => ReaderFixture.probeReportingScroll("123456789"));
+  expect(customScrollbarProbe.ready, JSON.stringify(customScrollbarProbe)).toBe(true);
+  expect(customScrollbarProbe.vertical_scrollbar).toMatchObject({
+    track_height: 190,
+    thumb_height: 54,
+    has_nested_thumb: true,
+  });
+  expect(customScrollbarProbe.target_diagnostics.scroll_diagnostics.vertical_scrollbar_candidates.length).toBeGreaterThan(0);
   // Horizontal report layout: switches/names are frozen; metric cells are in a
   // separate marker-free body. Pan the header and metric body together, never
   // the frozen pane or an unrelated scrollable editor.

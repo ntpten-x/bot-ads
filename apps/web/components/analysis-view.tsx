@@ -6,6 +6,7 @@ import {
   goalLabels,
   requiredColumns,
   type AnalysisGoal,
+  type AnalysisSource,
 } from "../../../packages/core/src/analysis";
 import { buildCaptureReview } from "../../../packages/core/src/capture-review";
 import { csvSafe } from "../../../packages/core/src/index";
@@ -45,6 +46,16 @@ const evaluationLabels = {
   lower_cost: "ต้นทุนต่ำกว่าค่ากลาง",
   typical_cost: "ต้นทุนใกล้ค่ากลาง",
   higher_cost: "ต้นทุนสูงกว่าค่ากลาง",
+} as const;
+const sourceLabels: Record<AnalysisSource, string> = {
+  csv: "CSV",
+  dom_capture: "DOM (lower bound)",
+  unknown: "ไม่ทราบแหล่ง",
+};
+const importScopeLabels = {
+  verified_for_import: "กระทบยอดไฟล์แล้ว",
+  unverified: "ยังไม่กระทบยอด",
+  not_applicable: "",
 } as const;
 const metricLabel = (k: string) => labels[k] ?? k;
 function fmt(n: number | null | undefined) {
@@ -104,6 +115,7 @@ export default function AnalysisView({
             r.attribution,
             r.result_type,
             r.objective,
+            r.source,
             Object.entries(r.breakdown).sort(),
           ]) === group.key,
       )
@@ -203,6 +215,7 @@ export default function AnalysisView({
                       {g.date_start} ถึง {g.date_end} · {g.currency} ·{" "}
                       {g.attribution} · {g.result_type} ·{" "}
                       {g.objective ?? "ไม่ระบุวัตถุประสงค์"} ·{" "}
+                      {sourceLabels[g.source]} ·{" "}
                       {JSON.stringify(g.breakdown)}
                     </option>
                   ))
@@ -214,6 +227,14 @@ export default function AnalysisView({
             คอลัมน์หลัก: {requiredColumns[goal].map(metricLabel).join(" · ")} พร้อม
             Account / Campaign / Ad Set / Ad ID วันที่ สกุลเงิน เขตเวลา และ
             Attribution
+          </p>
+          <p className="hint">
+            แหล่งยอดหลัก: CSV ที่กระทบยอดแล้ว · พบ CSV{" "}
+            {report.source_mix.csv} แถว (กระทบยอดแล้ว{" "}
+            {report.verified_import_rows} แถว), DOM{" "}
+            {report.source_mix.dom_capture} แถว (หลักฐานเสริม lower bound),
+            ไม่ทราบแหล่ง {report.source_mix.unknown} แถว. ระบบแยกชุดตามแหล่งและ
+            ไม่บวกยอดข้าม CSV/DOM
           </p>
           <div className="button-group">
             <button
@@ -495,7 +516,12 @@ export default function AnalysisView({
                   <tr key={r.key}>
                     <td>
                       <strong>{r.ad_name ?? r.ad_id}</strong>
-                      <small>{r.ad_id}</small>
+                      <small>
+                        {r.ad_id} · {sourceLabels[r.source]}
+                        {r.import_reconciliation === "not_applicable"
+                          ? ""
+                          : ` · ${importScopeLabels[r.import_reconciliation]}`}
+                      </small>
                     </td>
                     <td>
                       {fmt(r.reported.spend)}

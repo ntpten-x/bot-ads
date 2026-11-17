@@ -154,12 +154,10 @@ test("ranking uses cost per result among rows with enough results; recommendatio
   assert.equal(a.ranking.best[0].name, "Fixture D");
   assert.equal(a.ranking.worst[0].name, "Fixture A");
   const codes = a.recommendations.map((r) => r.code);
-  assert.equal(a.recommendations[0].code, "payment_error");
-  assert.deepEqual(a.recommendations[0].rows, [
-    "Fixture A",
-    "Fixture B",
-    "Fixture C",
-  ]);
+  assert.ok(
+    !codes.includes("payment_error"),
+    "payment_error is a billing diagnostic, not a performance recommendation",
+  );
   assert.ok(codes.includes("paused_low_cost"));
   assert.ok(
     !codes.includes("high_cost_per_result"),
@@ -276,6 +274,44 @@ test("job analysis groups levels and reports data quality", () => {
   assert.equal(j.data_quality.identity, "no_stable_ids");
   assert.equal(j.levels[1].reported_total_rows, 40);
   assert.equal(j.levels[1].coverage, "partial");
+});
+
+test("breakdown partitions expose verified rows as a lower bound instead of using the report-wide footer", () => {
+  const partition = scoped([verified("111", "10", "100")], {
+    reported_total_rows: 40,
+    reporting_context: {
+      date_range_label: "Nov 14, 2026 – Nov 14, 2026",
+      currency: "THB",
+      timezone: "Asia/Bangkok",
+      attribution: "7-day click",
+      breakdown: { age: "25–34" },
+      filters: [],
+    },
+  });
+  const level = analyzeCaptureLevel("campaigns", [partition]);
+  assert.equal(level.reported_total_rows, 40);
+  assert.equal(level.reported_total_scope, "report");
+  assert.equal(level.coverage, "lower_bound");
+  assert.equal(level.verified_unique_rows, 1);
+  const lowerBound = level.recommendations.find(
+    (r) => r.code === "partition_total_unverified",
+  );
+  assert.ok(lowerBound);
+  assert.ok(!/จาก\s*40/.test(lowerBound.message));
+  assert.ok(
+    level.warnings.some((w) => w.includes("ยอดรวมทั้งรายงาน")),
+    "the UI can explain that 40 is report-wide, not this partition's total",
+  );
+
+  const job = analyzeCaptureJob([partition]);
+  assert.equal(job.data_quality.coverage[0].reported_scope, "report");
+  assert.equal(job.data_quality.coverage[0].coverage, "lower_bound");
+
+  const wholeReport = analyzeCaptureLevel("campaigns", [
+    scoped([verified("222", "10", "100")]),
+  ]);
+  assert.equal(wholeReport.reported_total_scope, "partition");
+  assert.equal(wholeReport.coverage, "complete");
 });
 
 const verified = (id = "111", results = "10", spend = "100"): CaptureRow => ({
@@ -491,6 +527,29 @@ test("row attribution and result type determine comparable groups without cross-
   assert.ok(job.levels.every((l) => l.result_groups[0].results === 10));
 });
 
+test("multiline attribution fragments with duplicate lines stay in one comparable scope", () => {
+  const variants = [
+    "การคลิกในช่วง\n7 วัน\nคอนเวอร์ชั่นทั้งหมด",
+    "คอนเวอร์ชั่นทั้งหมด\nการคลิกในช่วง\n7 วัน\nคอนเวอร์ชั่นทั้งหมด",
+    "การคลิกในช่วง\n7 วัน\nคอนเวอร์ชั่นทั้งหมด\nคอนเวอร์ชั่นทั้งหมด",
+  ];
+  const rows = variants.map((text, index) => {
+    const item = verified(String(111 + index), "10", "100");
+    item.cells.push({ header: "Attribution setting", text });
+    return item;
+  });
+  const job = analyzeCaptureJob([scoped(rows)]);
+  assert.equal(
+    job.levels.length,
+    1,
+    "one attribution cell must not become several reporting scopes",
+  );
+  assert.equal(job.levels[0].context.attribution?.includes("การคลิกในช่วง"), true);
+  assert.equal(job.levels[0].context.attribution?.includes("หรือการดูในช่วง"), false);
+  assert.equal(job.levels[0].result_groups[0].results, 30);
+  assert.equal(job.levels[0].result_groups[0].rows, 3);
+});
+
 test("stable IDs fill unknown attribution from another compatible horizontal slice", () => {
   const metrics = verified("111", "10", "100");
   metrics.cells = metrics.cells.filter(
@@ -657,7 +716,7 @@ test("unresolved delivery observations remain diagnostics without claiming uniqu
   assert.equal(a.unique_rows, 0);
   assert.equal(a.delivery_counts.payment_error ?? 0, 0);
   assert.equal(a.delivery_observation_counts.payment_error, 2);
-  assert.ok(a.recommendations.some((r) => r.code === "payment_error"));
+  assert.ok(!a.recommendations.some((r) => r.code === "payment_error"));
   assert.equal(analyzeCaptureJob([scoped([base])]).payment_error, true);
 });
 

@@ -102,7 +102,7 @@ export type ImportRow = {
   created_at: string;
   filename: string;
   row_count: number;
-  report: Omit<Quality, "records">;
+  report: Omit<Quality, "records"> & { source?: string };
 };
 export type Summary = {
   campaigns: number;

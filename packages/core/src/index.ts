@@ -110,6 +110,30 @@ export const importSchema = z.object({
     .default({}),
 });
 export type ImportInput = z.infer<typeof importSchema>;
+export type ReconciliationCheck = {
+  expected: number | null;
+  actual: number;
+  delta: number | null;
+  matched: boolean | null;
+};
+export type ImportReconciliation = {
+  scope: "import";
+  status: "verified_for_import" | "incomplete" | "mismatch";
+  verified: boolean;
+  rows: ReconciliationCheck;
+  spend: ReconciliationCheck;
+  interval: {
+    checked: boolean;
+    expected_start: string | null;
+    expected_end: string | null;
+    actual_start: string | null;
+    actual_end: string | null;
+    matched: boolean | null;
+  };
+  unchecked_inputs: Array<"rows" | "spend" | "interval">;
+  mismatches: string[];
+  note: string;
+};
 const numeric = [
   "spend",
   "impressions",
@@ -284,20 +308,94 @@ export function parseReport(input: ImportInput) {
         );
   }
   const spend = records.reduce((n, r) => n + r.spend, 0);
+  const expectedRows = input.expected.rows ?? null;
+  const expectedSpend = input.expected.spend ?? null;
+  const rowsMatched =
+    expectedRows === null ? null : expectedRows === records.length;
+  const spendMatched =
+    expectedSpend === null
+      ? null
+      : Math.abs(expectedSpend - spend) <= 0.005;
+  const intervalChecked =
+    input.expected.date_start !== undefined ||
+    input.expected.date_end !== undefined;
+  const intervalMatched = !intervalChecked
+    ? null
+    : !records.some(
+        (r) =>
+          (input.expected.date_start &&
+            r.date_start !== input.expected.date_start) ||
+          (input.expected.date_end && r.date_end !== input.expected.date_end),
+      );
+  const mismatches = [
+    ...(rowsMatched === false ? ["rows"] : []),
+    ...(spendMatched === false ? ["spend"] : []),
+    ...(intervalMatched === false ? ["interval"] : []),
+  ];
+  const uncheckedInputs: ImportReconciliation["unchecked_inputs"] = [
+    ...(expectedRows === null ? (["rows"] as const) : []),
+    ...(expectedSpend === null ? (["spend"] as const) : []),
+    ...(!intervalChecked ? (["interval"] as const) : []),
+  ];
+  const reconciled =
+    rowsMatched === true &&
+    spendMatched === true &&
+    intervalMatched !== false;
+  const reconciliation: ImportReconciliation = {
+    scope: "import",
+    status: mismatches.length
+      ? "mismatch"
+      : reconciled
+        ? "verified_for_import"
+        : "incomplete",
+    verified: reconciled && mismatches.length === 0,
+    rows: {
+      expected: expectedRows,
+      actual: records.length,
+      delta: expectedRows === null ? null : records.length - expectedRows,
+      matched: rowsMatched,
+    },
+    spend: {
+      expected: expectedSpend,
+      actual: spend,
+      delta:
+        expectedSpend === null
+          ? null
+          : Number((spend - expectedSpend).toFixed(6)),
+      matched: spendMatched,
+    },
+    interval: {
+      checked: intervalChecked,
+      expected_start: input.expected.date_start ?? null,
+      expected_end: input.expected.date_end ?? null,
+      actual_start: records.length
+        ? records.reduce(
+            (min, r) => (r.date_start < min ? r.date_start : min),
+            records[0].date_start,
+          )
+        : null,
+      actual_end: records.length
+        ? records.reduce(
+            (max, r) => (r.date_end > max ? r.date_end : max),
+            records[0].date_end,
+          )
+        : null,
+      matched: intervalMatched,
+    },
+    unchecked_inputs: uncheckedInputs,
+    mismatches,
+    note: "Reconciliation verifies only this imported file's scope. Whole-account coverage remains unverified.",
+  };
   if (
-    input.expected.rows !== undefined &&
-    input.expected.rows !== records.length
+    expectedRows !== null &&
+    rowsMatched === false
   )
-    errors.push(
-      `Expected ${input.expected.rows} rows, found ${records.length}`,
-    );
+    errors.push(`Expected ${expectedRows} rows, found ${records.length}`);
   if (
-    input.expected.spend !== undefined &&
-    Math.abs(input.expected.spend - spend) > 0.005
+    expectedSpend !== null &&
+    spendMatched === false
   )
-    errors.push(
-      `Spend differs: expected ${input.expected.spend}, found ${spend}`,
-    );
+    errors.push(`Spend differs: expected ${expectedSpend}, found ${spend}`);
   if (
     records.some(
       (r) =>
@@ -313,7 +411,7 @@ export function parseReport(input: ImportInput) {
   ];
   if (records.some((r) => r.date_start !== r.date_end))
     warnings.push("Period aggregates detected; these are not daily insights.");
-  if (!input.expected.rows || input.expected.spend === undefined)
+  if (!reconciliation.verified)
     warnings.push(
       "Source reconciliation is incomplete: supply expected row count and spend.",
     );
@@ -340,7 +438,11 @@ export function parseReport(input: ImportInput) {
     errors,
     warnings,
     summary: { rows: records.length, spend, levels: [...levels] },
+    reconciliation,
     coverage: "unverified" as const,
+    scope_coverage: reconciliation.verified
+      ? ("verified_for_import" as const)
+      : ("unverified" as const),
   };
 }
 export function recordKey(r: AdRecord) {

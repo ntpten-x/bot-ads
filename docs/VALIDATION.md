@@ -1,5 +1,855 @@
 # Validation record — 2026-11-15
 
+## CSV-first reconciliation — 2026-11-17
+
+`parseReport()` now returns a structured `reconciliation` object plus
+`scope_coverage`. A successful import requires expected row count and spend to
+match; an optional expected date interval is checked when supplied. The
+whole-account `coverage` remains `unverified` and is never promoted by a
+file-level match.
+
+Saved CSV observations receive server-stamped
+`raw._import_reconciliation` provenance after validation. The normal export
+therefore carries proof that the row came from a reconciled file, while
+analysis still reports `verified_import_rows` separately. DOM rows are
+`not_applicable`; old CSV rows without proof are `unverified`.
+
+Analysis now classifies `csv`, `dom_capture` and `unknown` sources, sorts CSV
+groups first and includes source in the comparable group key. CSV and DOM rows
+with the same IDs and conditions remain separate groups and their totals are
+never summed. This is source separation, not a claim that DOM is a second
+complete report.
+
+Validation passed:
+
+- `npm test` — 73/73, including reconciliation success/mismatch/missing-input
+  cases, source separation, and server-proof tamper handling.
+- `npm run typecheck`, `npm run build`, `npm run build:web`.
+- `npm run test:analysis` — preview/import/export persistence of
+  reconciliation and provenance passed against local PostgreSQL.
+- `npm run test:api` — validated import, idempotency, export and queue passed.
+- `npm run test:web` — production UI flow passed, including reconciled-file
+  status, source counts in filtered JSON export, and 2 verified imported rows
+  in the saved analysis export.
+
+The local API was restarted on `127.0.0.1:4318` and Next dev is running on
+`127.0.0.1:9321`. No new live Meta collection or whole-account coverage claim
+was made in this change.
+
+## 0.6.41 live validation — 2026-11-17
+
+After the user reloaded Extension `0.6.41` and opened a fresh local report
+lease, the bounded Age run completed with job
+`047d3c3e-64c5-447c-bdc1-ed25727550a2`. The run persisted 8 snapshots and
+ended `needs_review` with no `level_warnings`. The native reset succeeded live
+(`reset=true`, `method=native_scrollbar_drag`, scrollbar `at_top=true`) and the
+final paging attempt returned `reporting_bottom_reached` with
+`at_bottom=true`, `attempted_scrollbar=true` and no further row identity
+change. This closes the false `visible_rows_unchanged` result from `0.6.40`.
+
+The capture contained 198 raw Age observations and 35 unique parent Ad IDs.
+Per-Age verified counts were `18–24: 34`, `25–34: 35`, `35–44: 32`,
+`45–54: 26`, `55–64: 26` and `65+: 27`. Meta's footer reported 40 ads for the
+whole report; it does not prove a separate total for each Age partition, so
+these counts are exposed as `coverage=lower_bound` and must not be read as
+`x/40` completeness for each partition. No cross-Age totals or whole-account
+claim is supported.
+
+`report.prepare messages` returned `applied=true`, `missing_required=[]` and
+`missing_goal_metrics=["link_clicks","messaging_conversations"]`. The analysis
+produced one messaging result group in every Age scope, with eligible ranking
+counts `8/9/4/2/2/2`; no column, identity, timezone or filter blockers remained.
+Examples include `MLBB` at `฿12.08` CPA for `18–24` and
+`MLBB, Free Fire, Rov, PUBG Mobile` at `฿7.21` CPA for `55–64`. These are
+bounded recommendations from verified visible rows, not whole-account totals.
+`payment_error=true` stayed diagnostic-only and added no recommendation.
+
+## 0.6.41 analysis coverage semantics fix — 2026-11-17
+
+Core/API/web now distinguishes the scope of the footer row count. A level with
+no active Breakdown keeps `reported_total_scope=partition` and may reach
+`coverage=complete`. A Breakdown partition only sees a report-wide footer, so
+it reports `reported_total_scope=report` and `coverage=lower_bound`; the UI
+shows `ยืนยัน ID ได้ N แถว (ขั้นต่ำของกลุ่มนี้)` instead of `N/40`. The
+`partition_total_unverified` recommendation explains that the footer total is
+report-wide, and no code sums Age partitions into a report total. This change
+does not require an Extension reload because the Extension bundle is unchanged;
+restart the API/web processes to load it.
+
+The web analysis panel now exposes explicit operator context controls for
+timezone, attribution, no filters and no Breakdown. Only checked/entered values
+are sent to `/captures/analysis`; values persist locally so the operator does
+not have to re-enter them on every refresh. This is the missing bridge that
+previously left the web panel blocked while `ads:agent` could already rank.
+
+Validation: `npm run check` (strict typecheck, 71/71 unit tests and builds),
+`test:capture-analysis-web` with a synthetic Breakdown partition, and the
+specific `capture-analysis` test suite. After restarting the API, the live
+`/captures/analysis` response for job
+`047d3c3e-64c5-447c-bdc1-ed25727550a2` returned
+`reported_scope=report` and `coverage=lower_bound` for all six Age scopes
+(`34/35/32/26/26/27` verified rows against the report-wide `40`), with
+`partition_total_unverified` recommendations and no `x/40` completeness claim.
+The live browser check opened the `0.6.41` job, confirmed
+`Asia/Bangkok` + no filters, and observed the `18–24` scope render its
+messaging result group, spend, CPA and best/worst ranking instead of the
+timezone/filter blockers. The web fixture also asserts that the panel sends
+`timezone=Asia/Bangkok` and `confirm_no_filters=true`.
+
+## 0.6.41 source validation — 2026-11-17
+
+Live `0.6.40` after reload and a fresh lease completed a bounded Age run but
+still ended `needs_review`. Job
+`b344acdc-1d78-467c-a27f-b0056021c642` persisted 8 snapshots, 196
+observations and 35 unique parent Ad IDs. Coverage against the 40 rows
+reported by Meta remained partial in every scope: `18–24: 34/40`,
+`25–34: 35/40`, `35–44: 32/40`, `45–54: 26/40`, `55–64: 26/40` and
+`65+: 27/40`. No cross-scope totals or ranking over the whole account are
+supported.
+
+Paging steps 1–2 used `wheel`, steps 3–7 used `scroll_into_view`, and step 8
+returned `visible_rows_unchanged`. At step 8 the custom scrollbar existed
+(track top `311`, height `1102`; thumb top `1277`, height `131`), but its
+thumb was only about 5px above the nominal track end. The previous 2px edge
+tolerance therefore failed to classify the physical bottom. The native row
+reset still returned `reporting_view_changed_before_input`; the DOM reset
+reported `already_at_start`, so the native reset is not yet proven live.
+`payment_error=true` remained diagnostic-only with zero payment
+recommendations. Missing goal metrics were `link_clicks` and
+`messaging_conversations`.
+
+`0.6.41` changes:
+
+- Native body and custom-scrollbar edges use a bounded 8px tolerance. A
+  near-bottom thumb is recognized without treating an arbitrary partial page
+  as complete.
+- `target_diagnostics.at_bottom` can be established by the custom scrollbar
+  itself, not only by a scrollable row ancestor.
+- After debugger attach, paging and reset may rebase to a repainted view only
+  after two consecutive identical probes. A continuously changing view still
+  returns `reporting_view_changed_before_input`.
+- `report-scroll` adds a fixture with a 5px bottom gutter and a fixture where
+  attach performs one repaint before a trusted reset succeeds.
+
+Checks on the `0.6.41` build passed: `npm run check` (strict typecheck, 70/70
+unit tests and build), `test:reader`, `test:report-scroll`,
+`test:report-input`, `test:report-probe`, `test:report-selected-columns`,
+`test:report-columns`, `test:breakdown` and `test:capture-analysis-web`.
+`dist/extension/manifest.json` and `reader_version` are `0.6.41`. The live
+evidence above confirms native reset and physical-bottom handling; complete
+per-Age or whole-account coverage is still not claimed.
+
+## 0.6.40 source validation — 2026-11-17
+
+Live `0.6.39` after reload and a fresh lease passed report columns and Age
+Breakdown setup, but still stored one snapshot and ended `needs_review`. The
+scroll diagnostics finally proved the custom-scrollbar hypothesis:
+`attempted_scrollbar=true`, a `17px × 1102px` track and a `131px` nested thumb
+were detected. The thumb was already at the bottom of the track, so the only
+planned drag moved downward by about 86px and could not introduce new rows.
+Coverage remained five parent Ad IDs in the top scopes (`18–24: 5`, `25–34: 5`,
+`35–44: 5`, `45–54: 2`, `55–64: 3`, `65+: 4`) against 40 reported rows.
+`payment_error=true` remained diagnostic-only with zero payment
+recommendations.
+
+`0.6.40` adds the missing reset:
+
+- The custom-scrollbar probe exposes `track_top`, `thumb_top`, `at_top` and
+  `at_bottom` in addition to the drag target.
+- At job step zero, after the ordinary DOM reset, a guarded native reset checks
+  the custom thumb. If it is not at the top, the Extension hovers the thumb,
+  presses, drags it to the top of the track and releases it. Every debugger
+  command rechecks the report lease, active tab, account, route, bridge and
+  running job.
+- Reset is accepted only when the thumb reaches `at_top` and the visible row
+  signature changes. A thumb that reaches the top without a changed row set is
+  reported as `reset_rows_unverified`; a missing track is
+  `custom_scrollbar_not_found`.
+- The browser fixture starts with the thumb near the bottom, verifies the
+  trusted up-drag, changed row IDs, `thumb_top=0px`, method
+  `native_scrollbar_drag` and debugger detach.
+
+Checks on the `0.6.40` build passed: `npm run check` (strict typecheck, 70/70
+unit tests and build), `test:reader`, `test:report-scroll`,
+`test:report-input`, `test:report-probe`, `test:report-selected-columns`,
+`test:report-columns`, `test:breakdown` and `test:capture-analysis-web`.
+`dist/extension/manifest.json` and `reader_version` are `0.6.40`. Live
+acceptance still requires reload, a fresh lease and a complete Age run; no
+complete-coverage claim is supported yet.
+
+## 0.6.39 source validation — 2026-11-17
+
+Live `0.6.38` after reload and a fresh lease still failed the bounded Age
+acceptance. The job stored one snapshot and ended `needs_review` with only the
+first five parent Ad IDs (`18–24: 5`, `25–34: 5`, `35–44: 5`, `45–54: 2`,
+`55–64: 3`, `65+: 4`) against 40 reported rows. Native paging returned
+`visible_rows_unchanged` with `attempted_scrollbar=false`, no scrollbar
+candidates and no vertical scrollbar geometry. `payment_error=true` remained a
+diagnostic observation; it did not create a recommendation or block ranking.
+
+Read-only comparison with the live DOM showed why the hover re-probe was not
+enough: the custom scrollbar can be a sibling of the header/row reporting
+scope. The `0.6.38` planner searched only inside that scope, so a hidden track
+outside it could not become a hover target.
+
+`0.6.39` changes:
+
+- The custom-scrollbar search now includes the nearest reporting ancestors of
+  the grid scope, bounded to four ancestors, while retaining the narrow
+  right-edge geometry and strict interactive-control exclusion.
+- Right-edge hover points are planned before the ten-target budget is consumed.
+  Hover-only targets are not followed by a redundant wheel event.
+- The custom-scrollbar fixture places its track outside the reporting scope and
+  keeps it hidden until a trusted hover. The fixture verifies that hover
+  reveals the track, the drag introduces new row identities, the method is
+  `native_scrollbar_drag`, no wheel is sent and the debugger detaches.
+- `payment_error` is diagnostic-only. It stays visible in delivery
+  observations but is neither a recommendation nor a ranking/blocking signal,
+  because adding ad credit clears Meta's billing message.
+
+Checks on the `0.6.39` build passed: `npm run check` (strict typecheck, 70/70
+unit tests and build), `test:reader`, `test:report-scroll`,
+`test:report-input`, `test:report-probe`, `test:report-selected-columns`,
+`test:report-columns`, `test:breakdown` and `test:capture-analysis-web`.
+`dist/extension/manifest.json` is `0.6.39`. Live acceptance still requires
+reload, a fresh lease and a complete Age run; no complete-coverage claim is
+supported yet.
+
+## 0.6.38 source validation — 2026-11-17
+
+Live `0.6.37` improved the first bounded Age run from one snapshot to eight.
+Coverage rose to 26–35 verified rows per Age scope, but the job still ended
+`needs_review`: DOM paging succeeded seven times via `scroll_into_view`, then
+the native path returned `reporting_input_timeout` at step 8. No target
+diagnostics were emitted because the 12-second deadline expired before a
+controlled result.
+
+A second run on the same `0.6.37` view, using `--skip-prepare --skip-navigate`,
+captured one snapshot. Its native attempt reported
+`visible_rows_unchanged`, `attempted_scrollbar=false`, no scrollbar candidates
+and no vertical scrollbar. This reproduced Meta's hover-dependent custom
+scrollbar: the initial probe did not see it, so the planned wheel target never
+triggered the drag.
+
+`0.6.38` addresses both findings:
+
+- Every native target hover is re-probed. If the right-edge custom scrollbar
+  appears after the trusted pointer move, the newly visible thumb is dragged
+  before that target is consumed as a wheel.
+- The vertical input deadline increases from 12 to 30 seconds. Individual
+  debugger operations remain bounded at 6 seconds, and every command still
+  rechecks lease/tab/account/route/job authority.
+- The fixture now starts with the custom track hidden by CSS. A trusted hover
+  reveals it, the drag changes row IDs, returns `native_scrollbar_drag`, does
+  not use a wheel and detaches the debugger.
+- The probe normalizes an absent custom scrollbar to `null` instead of an
+  omitted property.
+
+Checks on `0.6.38` all passed: `npm run check` (strict typecheck, 70/70 unit
+tests and build), `test:reader`, `test:report-scroll`, `test:report-input`,
+`test:report-probe`, `test:report-columns`, `test:breakdown` and
+`test:capture-analysis-web`. Live acceptance still requires reload, a fresh
+lease and a full Age run; the eight-snapshot `0.6.37` result is useful evidence
+but not completion.
+
+## 0.6.37 source validation — 2026-11-17
+
+Live `0.6.36` completed the bounded Age run without the debugger hang. The job
+captured one snapshot and ended `needs_review`; columns and Breakdown checks
+passed, but every vertical paging attempt returned `visible_rows_unchanged`.
+Coverage remained five parent Ad IDs in the first four Age scopes and smaller
+counts at the top of the table (`18–24: 5`, `25–34: 5`, `35–44: 5`, `45–54: 2`,
+`55–64: 3`, `65+: 4`) against 40 reported rows. `payment_error=true` was
+preserved. No ad was edited or published.
+
+Read-only inspection found the missing paging owner: Meta uses a custom
+right-edge vertical scrollbar. It is a narrow, tall `div` with no
+`role="scrollbar"`, is not an ancestor of the reporting rows, and therefore
+never appeared in `body_offsets`. The existing wheel targets could repaint
+metrics without changing row identity.
+
+`0.6.37` adds a guarded custom-scrollbar path:
+
+- Body-offset diagnostics traverse through `document.documentElement`, include
+  `overflow-y: clip`, and expose whether each offset contains headers or rows.
+- The reader detects one bounded right-edge track (4–28px wide, at least 80px
+  tall), preferring a nested thumb and falling back to the track node only for
+  local drag coordinates.
+- `scrollReportWithInput` rechecks the report lease, active tab, account, route,
+  bridge and running job before every debugger command. It sends trusted
+  `mouseMoved`, `mousePressed`, drag `mouseMoved` and `mouseReleased` events.
+- A drag is successful only when row fingerprints introduce an identity that
+  was not visible before. It returns `method=native_scrollbar_drag` and observes
+  for up to 900ms; unchanged or repainted metrics are not paging evidence.
+- No caller-provided coordinates, selectors, page text, cookies, network
+  interception or remote input are accepted.
+
+Source/fixture checks on the `0.6.37` build:
+
+- `npm run check`: strict typecheck, 70/70 unit tests and Extension/API build
+- `dist/extension/manifest.json` and `reader_version`: `0.6.37`
+- `npm run test:reader`: custom right-edge track/thumb geometry is exposed
+- `npm run test:report-scroll`: a role-less track receives one trusted
+  down/move/up sequence, row IDs change, method is `native_scrollbar_drag`, no
+  wheel path runs, and the debugger detaches
+- `npm run test:report-input`: lease/account/job guards, trusted input, modal,
+  timeout and detach checks
+- `npm run test:report-probe` passes
+
+Live follow-up on `0.6.37` after reload produced eight snapshots and 26–35
+verified rows per Age scope, then timed out at step 8. A second run exposed the
+hover-dependent scrollbar and captured only one snapshot. The `0.6.38` section
+above records both the remaining gap and the two fixes. `needs_review` remains
+not completion.
+
+## 0.6.36 source validation — 2026-11-17
+
+Live `0.6.35` confirmed the Breakdown early-return and menu close. With
+`--no-scan-columns`, the job captured one snapshot and advanced to `step=1`, but
+then stayed there for more than five minutes with no `scroll_log` entry. The
+start acknowledgement also exceeded 30 seconds. Because horizontal scanning was
+disabled, the remaining debugger path was the vertical native wheel; a hung
+`chrome.debugger` promise kept the worker `busy` and no error was recorded.
+
+`0.6.36` bounds every debugger call used by report input:
+
+- `attach`, `sendCommand` and `detach` are wrapped in a 6-second timeout.
+- A timeout returns an explicit `debugger_attach_timeout`,
+  `debugger_command_timeout` or `debugger_detach_timeout` reason instead of
+  freezing the job.
+- A browser fixture replaces `chrome.debugger.sendCommand` with a never-resolving
+  promise and verifies `scrollReportWithInput` returns
+  `debugger_command_timeout` in under 20 seconds.
+
+Source/fixture checks on the `0.6.36` build:
+
+- `npm run check`: strict typecheck, 70/70 unit tests and Extension/API build
+- `dist/extension/manifest.json`: `0.6.36`
+- `npm run test:report-input`: hung-debugger timeout plus all existing trusted
+  input, lease, race, modal and detach checks
+- `npm run test:reader`, `test:report-scroll`, `test:report-probe`,
+  `test:report-selected-columns`, `test:report-columns`, `test:breakdown`,
+  `test:capture-analysis-web`
+
+Live follow-up on `0.6.36`: the user reloaded and opened a fresh lease. The
+bounded Age run completed without a debugger hang, so the timeout fix held, but
+it produced one `needs_review` snapshot and all paging attempts returned
+`visible_rows_unchanged`. See the `0.6.37` section for the custom-scrollbar root
+cause and the next acceptance run. No ad was edited or published.
+
+## 0.6.35 source validation — 2026-11-17
+
+Live `0.6.34` did not reach collection. Report columns applied, but Breakdown
+setup timed out twice with `breakdown_input_timeout` while the URL already had
+`demographics_breakdown=age`. A read-only inspection showed the Breakdown menu
+still open with “เลือกแล้ว 1 รายการ”, plus a visible Columns search input. The
+setup kept searching/iterating dimensions instead of accepting the applied Age
+state, and its loading check scanned the whole page body on every observation.
+
+`0.6.35` makes an applied breakdown idempotent:
+
+- If every requested dimension is active in the URL and no other dimension is
+  active, setup returns `ok=true` without searching or clicking. An already
+  open menu is closed with a guarded Escape key.
+- Dimensions that are neither requested nor active are skipped before search,
+  so an open Columns search cannot capture the Breakdown query.
+- Loading detection uses only visible progressbars/`aria-busy`; it no longer
+  scans all body text on each probe.
+- The Breakdown fixture repeats an already-applied Age setup and asserts zero
+  additional trusted clicks.
+
+Source/fixture checks on the `0.6.35` build:
+
+- `npm run check`: strict typecheck, 70/70 unit tests and Extension/API build
+- `dist/extension/manifest.json`: `0.6.35`
+- `npm run test:breakdown`: applied-state early return, trusted search/select,
+  clear/switch and detach
+- `npm run test:reader`, `test:report-scroll`, `test:report-input`,
+  `test:report-probe`, `test:report-selected-columns`, `test:report-columns`,
+  `test:capture-analysis-web`
+
+Live `0.6.35` confirmed the Breakdown fix: setup returned `ok=true`, selected
+`age`, and closed the open menu. Collection then hung in the horizontal
+column-scan phase: one snapshot with two row observations, `step=0`,
+`horizontal_step=0`, and the start acknowledgement timed out. Pausing set the
+job to `paused`, but the in-flight scan kept the worker busy, so a new start was
+refused. The agent now supports `--no-scan-columns`; the next bounded Age run
+uses that path to reach vertical paging. This is a transport fallback, not a
+data-model change.
+
+Live run after reload confirmed the Breakdown fix but hung in the vertical
+native-wheel debugger path with no `scroll_log` entry. See the `0.6.36` section
+above for the timeout guard.
+
+## 0.6.34 source validation — 2026-11-17
+
+Live `0.6.33` after reload still failed coverage acceptance. Column setup
+applied and Age breakdown stayed active, but the run produced a single snapshot,
+ended `needs_review`, and returned the same five parent Ad IDs:
+`18–24: 5`, `25–34: 5`, `35–44: 5`, `45–54: 2`, `55–64: 3`, `65+: 4` against 40
+reported rows. Paging reported `visible_rows_unchanged`.
+
+The scroll log showed why: all ten planned targets were metric bands
+(`band_index` 3–13), every target had empty `body_offsets`, and neither the
+right-edge gutter nor a custom scrollbar was probed. The gutter candidates were
+derived from `scopeRect.right`, which can be off-screen for a grid wider than
+the viewport, and the gutter loop ran after column bands had already consumed
+the ten-target budget.
+
+`0.6.34` makes scroll ownership explicit and first:
+
+- Visible `[role="scrollbar"]` elements are probed before column bands, using
+  their own geometry and the strict interactive-control exclusion.
+- Gutter candidates use the visible right edge
+  (`min(scopeRect.right, innerWidth)`) instead of an off-screen table edge.
+- `target_diagnostics.scroll_diagnostics` records the scope rectangle, visible
+  right edge, visible scrollbar geometry and body-target count so the next live
+  run shows whether the pager was found.
+- A fixture with twelve metric columns and a fixed visible scrollbar verifies
+  that body targets still win the bounded ten-target budget.
+
+Source/fixture checks on the `0.6.34` build:
+
+- `npm run check`: strict typecheck, 70/70 unit tests and Extension/API build
+- `dist/extension/manifest.json`: `0.6.34`
+- `npm run test:reader`: wide-grid scrollbar/gutter planning plus all prior
+  reader fixtures
+- `npm run test:report-scroll`: reset, identity-only paging, bottom detection,
+  inert safe band, bounded input and detach
+- `npm run test:report-input`: actual MV3 debugger input, lease/route guards,
+  race/modal no-extra-wheel checks and detach
+- `npm run test:report-probe`, `test:report-selected-columns`,
+  `test:report-columns`, `test:breakdown`, `test:capture-analysis-web`
+
+Live attempt after reload did not reach collection: Breakdown setup timed out
+twice with `breakdown_input_timeout` while Age was already active. See the
+`0.6.35` section above for the evidence and fix.
+
+## 0.6.33 source validation — 2026-11-17
+
+Live `0.6.32` after reload did not pass coverage acceptance. The bounded Age run
+stored 20 snapshots, ended `needs_review` with `payment_error=true`, and still
+held only 2–5 verified Ads per Age scope against 40 reported rows
+(`18–24: 5`, `25–34: 5`, `35–44: 5`, `45–54: 2`, `55–64: 3`, `65+: 4`). All
+snapshots came from the same five parent Ad IDs. The visible row count
+alternated between 24 and 21 because one row left the viewport; the previous
+paging check treated that count change as movement, so all 19 `scroll_log`
+entries were false positives. Live inspection also found a custom right-edge
+vertical scrollbar (about `15×386` px) and only three visible parent Ads.
+`row_reset` returned `{reset:false, reason:"already_at_start"}` because the
+diagnostics did not identify a body scroller, so the reset could not prove
+anything about the virtualized body.
+
+`0.6.33` tightens paging and plan selection:
+
+- Paging is proven only by a new visible row identity. `probeReportingScroll()`
+  now returns opaque `row_fingerprints`; a changed row count, `scroll_top`,
+  hover paint or losing one clipped row is not movement.
+- `resetReportingRows()` resets detected reporting-body offsets, waits for the
+  repaint and re-queries the first row before `scrollIntoView`. The pre-reset
+  marker is never reused, so a detached marker cannot scroll the view back to
+  the old bottom page.
+- Native wheel planning covers name/switch/legacy/metric and right-edge gutter
+  targets, bounded to 10 targets, 60 hit probes and a 12-second deadline. Every
+  point is hit-tested again against the strict interactive-control exclusion,
+  and gutter targets receive unique band indexes for hover re-resolution.
+
+Source/fixture checks on the `0.6.33` build:
+
+- `npm run check`: strict typecheck, 70/70 unit tests and Extension/API build
+- `dist/extension/manifest.json`: `0.6.33`
+- `npm run test:report-scroll`: reset from a bottom page, identity-only paging,
+  physical-bottom detection, inert safe band, bounded input and detach
+- `npm run test:report-input`: actual MV3 debugger input, lease/route guards,
+  no extra wheel after a paused/rebound context or modal, and detach
+- `npm run test:reader`, `test:report-probe`, `test:report-selected-columns`,
+  `test:report-columns`, `test:breakdown`, `test:capture-analysis-web`
+
+Live rerun after reload failed acceptance: one snapshot, `needs_review`, the
+same five parent Ad IDs and no verified paging. See the `0.6.34` section above
+for the target-planning evidence and fix. No ad was edited or published.
+
+## 0.6.32 source validation — 2026-11-17
+
+Live `0.6.31` after reload did not pass coverage acceptance. The bounded Age run
+persisted 10 snapshots and finished `needs_review`. It still produced six
+semantic Age scopes, but each scope held only 2–5 verified Ads against 40
+reported rows, so cost-per-result rankings were correctly ineligible.
+
+Root cause: the previous job left Meta's virtualized vertical body near its
+bottom. The next job started capture without returning that body to the first
+page and repeatedly captured the same last five Ads. `scroll_log` reported nine
+“moved” steps because the paging fingerprint included the body's `scroll_top`;
+the visible row identities never advanced. That is not verified paging.
+
+`0.6.32` adds `resetReportingRows()` and runs it after rows are ready at
+`step === 0`. It resets reporting-body offsets to `0`, waits for the repaint and
+re-queries the first visible row before `scrollIntoView`; the pre-reset marker
+is never reused because a virtualized table may detach it and scroll the view
+back to the old bottom page. The job records the result as `row_reset`.
+
+Paging fingerprints now contain only the visible row count and stable
+identities (ID, then name fallback). A changed body offset with identical
+identities returns `reporting_body_moved_rows_unverified`, not `moved=true` and
+not a new row count. Physical `scroll_top` remains diagnostic evidence only.
+
+Source/fixture checks on the `0.6.32` build:
+
+- `npm run check`: strict typecheck, 70/70 unit tests, Extension/API build
+- `dist/extension/manifest.json`: `0.6.32`
+- `npm run test:report-scroll`: starts with the body at the bottom and verifies
+  reset to the first row; also verifies that a changing row `scroll_top` with
+  identical IDs remains `moved=false`, plus physical-bottom detection and
+  trusted horizontal paging
+- `npm run test:report-input`: actual MV3 debugger input, lease/route guards and
+  debugger detach
+- `npm run test:reader`
+- `npm run test:report-probe`
+- `npm run test:report-selected-columns`
+- `npm run test:report-columns`
+- `npm run test:breakdown`
+- `npm run test:capture-analysis-web`
+
+Live rerun after reload failed acceptance: the bounded Age collection produced
+20 snapshots with only five parent Ad IDs and 2–5 verified Ads per scope. See
+the `0.6.33` section above for the evidence and the tightened paging rules. No
+ad was edited or published.
+
+## 0.6.31 source validation — 2026-11-17
+
+`0.6.31` fixes two evidence-mapping problems found in the live `0.6.30` Age run:
+
+- Age subrow text is grouped by its structural cell owner (left edge, height and
+  clipping) instead of by each text line's own x-coordinate. Multiline
+  Attribution fragments now stay in one cell; a wrapped `หรือการดูในช่วง`
+  line can no longer become an `ชื่อชุดโฆษณา` value or a new scope.
+- Attribution fragments are whitespace-normalized and deduplicated in shared
+  analysis, so identical cells with different DOM line order share one scope.
+- Native vertical input now uses the reporting body's `scroll_top`,
+  `client_height` and `scroll_height` to return `reporting_bottom_reached`
+  when the table is physically at its end. That state is no longer reported as
+  `visible_rows_unchanged` and does not add a false paging warning.
+
+Source/fixture checks on the `0.6.31` build:
+
+- `npm run typecheck`
+- `npm test`: 70/70 unit tests
+- `npm run test:reader`: multiline Attribution ownership and Age subrow mapping
+- `npm run test:report-scroll`: bottom detection and trusted-paging guards
+- `npm run test:report-input`: actual MV3 debugger input, lease/route guards and
+  debugger detach
+- `npm run test:report-probe`
+- `npm run test:report-selected-columns`
+- `npm run test:report-columns`
+- `npm run test:breakdown`
+- `npm run test:capture-analysis-web`
+
+The stored raw `0.6.30` Age job was reanalyzed with the `0.6.31` source and the
+operator-confirmed timezone/no-filter context. It produced exactly six semantic
+Age scopes (`18–24` through `65+`), with no one- or two-row scopes from
+Attribution line order. Each scope retained verified Ad IDs, reported Spend,
+Impressions, Results/result type, Cost per result and a complete multiline
+Attribution cell. Coverage remained partial at 26–35 verified unique rows per
+scope against 40 reported rows. The main result group remained the messaging
+conversation result type and eligible row rankings were available within each
+scope; no totals were combined across Age scopes.
+
+`ads:agent` now includes each scope's context, result groups, best/worst
+cost-per-result ranking, delivery counts and recommendations in its JSON output
+instead of returning only counts and recommendation codes.
+
+Live `0.6.31` was reloaded but failed coverage acceptance because paging stayed
+on the old bottom page; see the `0.6.32` section above. No ad was edited or
+published.
+
+## 0.6.30 source validation — 2026-11-17
+
+Live `0.6.29` reached the real reporting dialog but failed before Save with
+`ยกเลิกคอลัมน์ส่วนเกินไม่สำเร็จ`. The screenshot and accessibility snapshot
+showed a right-hand panel headed `เลือกไว้ 24 คอลัมน์`; each selected column has
+its own remove button, while the checkbox probe only saw the left-hand search
+result and its category controls. The rendered-header search path therefore
+searched labels that the active dialog view did not render.
+
+`0.6.30` adds a read-only `selected_columns` probe scoped to that panel. It
+returns each selected label plus the remove-button geometry and hit-test state,
+scrolls the panel when an extra is clipped, and removes extras one at a time
+through trusted Chrome input. The previous checkbox/search path remains as a
+fallback for layouts without the panel. The delivery-status header
+`ปิด / เปิด` is explicitly kept rather than treated as an extra metric.
+
+Source/fixture checks on the `0.6.30` build:
+
+- `npm run check`: strict typecheck, 69/69 unit tests, Extension/API `0.6.30` build
+- `npm run test:report-probe`
+- `npm run test:report-input`
+- `npm run test:report-selected-columns`: removes hidden Budget/Purchases/ROAS
+  through the selected-columns panel and verifies rendered headers
+- `npm run test:reader`
+- `npm run test:report-columns`
+- `npm run test:breakdown`
+- `npm run test:report-scroll`
+- `npm run test:capture-analysis-web`
+
+Live `0.6.30` after reload: `report.prepare` returned `applied=true` with
+`missing_required=[]` and pruned nine stale columns (Budget, Purchases,
+purchase conversions/cost, ROAS, audience, audience cost, created/delivered
+orders). The rendered table kept IDs, Age, Delivery, Results, Cost per result,
+Impressions, Spend, Attribution and Ad set name. Breakdown Age was verified with
+`demographics_breakdown=age`, and the bounded run persisted 10 snapshots.
+
+The analysis ended `needs_review` with partial coverage, not complete. It
+produced the six expected Age scopes (`18–24` through `65+`) with verified Ad
+IDs, per-row Spend from the reported column, Impressions, Results/result type,
+Cost per result and Attribution. The main scopes had 25–34 verified unique rows
+against 40 reported rows and eligible cost-per-result rankings of 2–9 rows.
+`missing_columns` and `blockers` were empty for those scopes.
+
+Four additional 1–2-row scopes appeared for `25–34`, `45–54` and `65+` because
+some Attribution cells contained one- and two-setting multiline text. They are
+kept separate rather than guessed or merged. The run also reported
+`visible_rows_unchanged` and therefore remains partial. Payment errors were
+present in the account evidence. No totals, coverage or ranking is labelled
+complete, and no ad was edited or published.
+
+## 0.6.29 source validation — 2026-11-17
+
+The first live `0.6.28` Age run proved that the navigation guard was necessary
+but not sufficient. `report.prepare` returned `applied=true`, yet the rendered
+table still contained Budget and purchase/ROAS columns and did not expose a
+usable Impressions/Results column together with stable IDs and Age. A second
+standalone prepare also returned `applied=true` with an empty prune list.
+Closing the dialog therefore did not prove that the saved view had changed.
+
+`0.6.29` treats rendered report headers as evidence, not only checkbox rows in
+the currently active dialog category. Extras visible in the table are searched
+and unselected through trusted input even when Meta does not render their choice
+in the open category. The probe also understands div-based choice rows and names
+selected choices from collapsed/hidden DOM. After Save, the prepare result must
+find every blocking field in the rendered headers and must find no stale extra
+header; otherwise `applied=false` with bounded `missing_rendered_fields` and
+`extra_rendered_headers` evidence.
+
+Source/fixture checks on the `0.6.29` build:
+
+- `npm run check`: strict typecheck, 69/69 unit tests, Extension/API `0.6.29` build
+- `npm run test:report-probe`: div/hidden choices and rendered header projection
+- `npm run test:report-input`: table-only hidden extra is pruned, stale rendered
+  headers reject Save, sort glyphs are normalized, a spend alias does not keep
+  a ROAS header that merely contains "ใช้จ่าย", and a rendered header with a
+  parenthetical is matched back to its dialog choice before trusted search
+- `npm run test:reader`
+- `npm run test:report-columns`
+- `npm run test:breakdown`
+- `npm run test:report-scroll`
+- `npm run test:capture-analysis-web`
+
+Live `0.6.29` acceptance remains pending a user reload and another bounded Age
+run. No capture, totals or ranking is accepted from the `0.6.28` run.
+
+## 0.6.28 source validation — 2026-11-17
+
+Live `0.6.27` passed the report-column prune, but the bounded Age run still
+produced incompatible horizontal slices. The first `report.prepare` reported
+`applied=true`, selected the required columns and pruned the stale `CPC (...)`
+and frequency choices. Breakdown Age was verified as
+`demographics_breakdown=age`. The subsequent collection produced 12 snapshots
+and ended `needs_review`: some slices contained Impressions/Results without
+stable IDs/Age/Spend, while others contained IDs/Age/Spend without
+Impressions/Results. A short `--skip-prepare` run reproduced the same split
+across 9 snapshots.
+
+After Breakdown, another `report.prepare` still succeeded but this time pruned
+Reach, proving Meta's transient report-column view had changed again. The
+strongest common cause is `start` navigating to the reporting URL even when the
+active tab was already the exact bound account, level and validated breakdown
+view. That reload discarded the columns applied by `report.prepare`.
+
+`0.6.28` adds the pure `needsReportingNavigation()` check. It reuses the current
+tab when the allowed host, exact level route, single matching `act`, and
+validated `*_breakdown` query all match; unrelated query parameters such as
+filters are preserved. Otherwise it navigates to the canonical reporting URL.
+Both paths still activate and maximize the bound tab. A unit test covers a
+matching view with extra filters, reordered breakdown parameters, account/level
+mismatches, duplicate or invalid breakdown values, and duplicate `act`.
+
+Observed on the rebuilt source/build `0.6.28`:
+
+- `npm run check`: strict typecheck, 69/69 unit tests, Extension/API 0.6.28 build
+- `npm run test:reader`
+- `npm run test:report-input`: trusted input, duplicate Reach, clipped list,
+  context mutation after uncheck and debugger detach
+
+This was source/fixture evidence only. The subsequent live `0.6.28` run is
+recorded above and did not pass report-column acceptance.
+
+## 0.6.27 source and fixture validation — 2026-11-17
+
+Live `0.6.26` passed heartbeat, lease and scroller discovery, but its
+`report.prepare` command `408ae704-3cdb-4ff7-922b-66dcc40849f8` stopped before
+Save while pruning Reach/Frequency/CPC. After trusted search, Meta changed the
+rendered choice context; the exact-context matcher dropped to zero matches and
+reported `target_not_unique`, even though the checked label was still present.
+
+`0.6.27` matches the same normalized label and checked state during search, then
+confirms success only when no checked choice with that label remains. This does
+not depend on post-search context and cannot mistake an unchecked duplicate
+sibling for the removed target. The report-input fixture now mutates Reach's
+context after uncheck and still passes.
+
+Observed on the rebuilt source/build `0.6.27`:
+
+- `npm run check`: strict typecheck, 68/68 unit tests, Extension/API 0.6.27 build
+- `npm run test:report-input`: duplicate Reach, clipped list, context mutation
+  after uncheck, trusted input and debugger detach pass
+- `npm run test:report-columns`
+- `npm run test:breakdown`
+- `npm run test:reader`
+- `npm run test:report-probe`
+- `npm run test:report-scroll`
+- `npm run test:capture-analysis-web`
+
+This is source/fixture evidence only. Live `0.6.27` acceptance remains pending
+reload and the bounded Age run; no capture, totals or ranking is accepted yet.
+
+## 0.6.26 source and fixture validation — 2026-11-17
+
+Live `0.6.25` still failed to prune reach/frequency/CPC. The trace contained 57
+clipped choices but no scroll target covering Meta's actual scroller. `0.6.26`
+includes the dialog itself in scroller discovery, falls back to a bounded wheel
+target, verifies the click through the hit-tested field probe, and records
+post-click state in the trace. The clipped-list fixture passes.
+
+Observed on the rebuilt source:
+
+- `npm run check`: strict typecheck, 68/68 unit tests, Extension/API 0.6.26 build
+- `npm run test:report-input`: clipped list and duplicate Reach pass
+- `npm run test:reader`
+- `npm run test:report-probe`
+- `npm run test:report-scroll`
+
+This was source/fixture evidence only. The subsequent live `0.6.26` run stopped
+at the post-search context-mutation blocker above; no capture or ranking was
+accepted.
+
+## 0.6.25 source and fixture validation — 2026-11-17
+
+Live `0.6.24` reached report setup but its prune step failed on reach/frequency/
+CPC choices that were checked yet clipped outside the scrollable option pane.
+`0.6.25` reports the bounded column-list scroller, moves it only through trusted
+mouse wheel input, re-probes coordinates, and matches the checked choice by
+label plus context before clicking. The browser fixture constrains the list to
+two visible rows to reproduce clipping.
+
+Observed on the rebuilt source:
+
+- `npm run check`: strict typecheck, 68/68 unit tests, Extension/API 0.6.25 build
+- `npm run test:report-input`: duplicate Reach and clipped-list pruning pass
+- `npm run test:reader`
+- `npm run test:report-probe`
+- `npm run test:report-scroll`
+
+This was source/fixture evidence only. The subsequent live 0.6.25 run reached
+report setup but still failed on clipped prune choices; no capture or ranking
+was accepted.
+
+## 0.6.24 source and fixture validation — 2026-11-17
+
+Live `0.6.23` reached report setup but stopped safely before Save because Meta
+exposed two exact Reach labels (one checked, one unchecked). The previous prune
+matcher treated this as ambiguous. `0.6.24` matches only the checked candidate
+and confirms removal by label plus context, without guessing from row position.
+
+Observed on the rebuilt source:
+
+- `npm run check`: strict typecheck, 68/68 unit tests, Extension/API 0.6.24 build
+- `npm run test:report-input`: duplicate Reach fixture prunes the checked
+  candidate and leaves the unchecked variant untouched
+- `npm run test:reader`
+- `npm run test:report-probe`
+- `npm run test:report-scroll`
+
+This was source/fixture evidence only. The subsequent live 0.6.24 run reached
+report setup but failed on clipped prune choices; no capture or ranking was
+accepted.
+
+## 0.6.23 source and fixture validation — 2026-11-17
+
+Extension 0.6.23 changes report setup to prune stale optional columns through the
+trusted Chrome input path before Save. This addresses the 0.6.22 live row shape
+where identity/Age/Spend and Impressions/Results occupied separate horizontal
+slices. It also starts horizontal scanning only when the captured diagnostics
+show real overflow, and the agent now reports `report_columns.pruned`.
+
+Observed on the rebuilt source:
+
+- `npm run check`: strict typecheck, 68/68 unit tests, Extension/API 0.6.23 build
+- `npm run test:reader`
+- `npm run test:breakdown`
+- `npm run test:report-input`: pre-selected Budget/Reach/Frequency/Purchases/ROAS
+  were unselected, required/name columns remained selected, and Save occurred
+  through trusted input
+- `npm run test:report-scroll`
+- `npm run test:report-probe`
+
+This was source/fixture evidence only. The subsequent live 0.6.23 run stopped at
+the duplicate-Reach prune blocker above; no complete age coverage, totals or
+ranking was claimed.
+
+## Live 0.6.22 Breakdown Age re-test — 2026-11-17
+
+After the user reloaded Extension 0.6.22 and enabled the local report lease, the
+agent verified a fresh heartbeat, the bound account and `report_input=true`.
+The first bounded run navigated to the Ads level but stopped at
+`report.prepare` with `ไม่พบหน้าต่างปรับแต่งคอลัมน์ที่พร้อมใช้งาน`; no report
+view was saved and no ad, budget or publishing action occurred. The receipt trace
+reported an ambiguous/missing report control during navigation.
+
+A second `report.prepare messages` on the settled page completed with
+`applied=true` and every blocking field verified: Campaign/Ad Set/Ad IDs, name,
+Spend, Impressions, Results, Cost per result and Attribution. Link clicks and
+Messaging conversations remained explicit `missing_goal_metrics`.
+
+The same device then ran:
+
+```text
+npm run ads:agent -- DEVICE_ID messages --breakdown=age \
+  --timezone=Asia/Bangkok --no-filters --max-steps=20 \
+  --timeout-seconds=900 --skip-prepare
+```
+
+Breakdown Age selected and verified the URL parameter
+`demographics_breakdown=age`. Collection job
+`a7c31357-2fed-48f3-8d22-738629a8d2b0` reached `needs_review` with 38 snapshots;
+all 38 were persisted by `reader_version=0.6.22`. The run produced 815 raw row
+observations and all six age scopes shown by Meta: `18–24`, `25–34`, `35–44`,
+`45–54`, `55–64`, `65+`.
+
+The live row shape still fails acceptance:
+
+- 805 age subrows carried a stable Ad ID, age and Spend.
+- none of those age subrows carried Impressions or Results;
+- `result_type` was absent from every age subrow;
+- 10 non-age observations carried Impressions/Results but had no stable ID,
+  age or Spend;
+- analysis therefore reported `missing_columns: ["impressions","results"]`,
+  partial coverage per age scope and no verified result groups/ranking;
+- horizontal diagnostics repeatedly reported
+  `reporting_input_timeout`, `visible_columns_unchanged` or
+  `reporting_view_changed_before_input`; vertical paging itself moved.
+
+This moves the immediate blocker from result-type propagation to horizontal
+slice pairing: the stable identity/age/Spend pane and the Impressions/Results
+pane were not visible together, and the non-age pane cannot be joined by name or
+position. The run is not complete or comparable, and no totals or rankings were
+accepted across age scopes.
+
+The source also gained a breakdown-grain regression: duplicate detection now
+uses `entity ID + visible breakdown combination` instead of Ad ID alone. Two age
+subrows with the same Ad ID are accepted as different grains, while an identical
+ID+age row is still rejected. Unit tests pass 68/68 and `npm run check` passes;
+live normalized promotion remains blocked by the missing metrics above.
+
 ## 0.6.22 read-only agent and report diagnostics
 
 Implemented `scripts/ads-agent.ts` and `npm run ads:agent` as a bounded

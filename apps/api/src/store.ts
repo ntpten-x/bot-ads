@@ -37,6 +37,19 @@ export async function saveImport(input: ImportInput) {
       [job, input.expected_account_id, fingerprint],
     );
     for (const r of report.records) {
+      const persisted = {
+        ...r,
+        raw: {
+          ...r.raw,
+          // Server-stamped provenance. Never trust a same-named CSV column as
+          // proof; this overwrites it after validation and before persistence.
+          _import_reconciliation: JSON.stringify({
+            version: 1,
+            filename: input.filename,
+            reconciliation: report.reconciliation,
+          }),
+        },
+      };
       await client.query(
         "INSERT INTO campaigns(account_id,id,name,details) VALUES($1,$2,$3,$4) ON CONFLICT(account_id,id) DO UPDATE SET name=excluded.name,details=campaigns.details || excluded.details",
         [
@@ -82,7 +95,12 @@ export async function saveImport(input: ImportInput) {
       if (r.breakdown)
         await client.query(
           "INSERT INTO insights_breakdowns(id,job_id,dimensions,data) VALUES($1,$2,$3,$4)",
-          [randomUUID(), job, JSON.stringify(r.breakdown), JSON.stringify(r)],
+          [
+            randomUUID(),
+            job,
+            JSON.stringify(r.breakdown),
+            JSON.stringify(persisted),
+          ],
         );
       await client.query(
         "INSERT INTO insight_observations(grain_key,account_id,level,entity_id,date_start,date_end,currency,timezone,attribution,result_type,data,last_job_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(grain_key) DO UPDATE SET data=excluded.data,last_job_id=excluded.last_job_id,updated_at=now()",
@@ -97,13 +115,13 @@ export async function saveImport(input: ImportInput) {
           r.timezone,
           r.attribution,
           r.result_type,
-          JSON.stringify(r),
+          JSON.stringify(persisted),
           job,
         ],
       );
       await client.query(
         "INSERT INTO insight_import_history(job_id,grain_key,data) VALUES($1,$2,$3)",
-        [job, key, JSON.stringify(r)],
+        [job, key, JSON.stringify(persisted)],
       );
     }
     await client.query(

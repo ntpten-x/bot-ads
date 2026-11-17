@@ -219,6 +219,52 @@ test("scroll mismatch, currency conflict, duplicate IDs and account mismatch blo
   );
 });
 
+test("breakdown subrows share an ad ID without becoming duplicate grains", () => {
+  const breakdownRows = ["25-34", "35-44"].map((age) => {
+    const cells = row().cells.map((c) =>
+      c.header === "แคมเปญ" ? { header: "โฆษณา", text: "Fixture ad" } : c,
+    );
+    cells.push({ header: "Age", text: age });
+    return row({
+      identity: "333",
+      parent_ids: { campaign_id: "111", ad_set_id: "222" },
+      cells,
+    });
+  });
+  const s = snapshot({
+    page: "/adsmanager/manage/ads",
+    row_observations: breakdownRows,
+  });
+  s.reporting_context!.breakdown = {};
+  const evaluated = evaluateSnapshot(s, {
+    ...options,
+    campaign_names: new Map([["111", "Fixture campaign"]]),
+  });
+  assert.deepEqual(
+    evaluated.map((r) => r.status),
+    ["ready", "ready"],
+  );
+  assert.deepEqual(
+    evaluated.map((r) => r.record?.breakdown),
+    [{ age: "25-34" }, { age: "35-44" }],
+  );
+
+  const duplicate = evaluateSnapshot(
+    snapshot({
+      page: "/adsmanager/manage/ads",
+      row_observations: [breakdownRows[0], { ...breakdownRows[0] }],
+    }),
+    { ...options, campaign_names: new Map([["111", "Fixture campaign"]]) },
+  );
+  assert.ok(
+    duplicate.every(
+      (r) =>
+        r.status === "needs_review" &&
+        r.reasons.includes("duplicate_id_in_snapshot"),
+    ),
+  );
+});
+
 test("child levels need DOM parent IDs and a promoted parent campaign", () => {
   const adset = snapshot({
     page: "/adsmanager/manage/adsets",

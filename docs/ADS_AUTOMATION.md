@@ -37,7 +37,8 @@ Backend ไม่รับ JavaScript, selector, พิกัด หรือ CD
 6. เริ่ม `start` ด้วย `levels=["ads"]`, `scan_columns=true`
 7. รอ job ถึงสถานะ `needs_review` หรือ `error`
 8. รอ capture snapshots ของ job ถูกบันทึกใน PostgreSQL
-9. เรียก `/captures/analysis` และคืน blockers, coverage และ recommendations
+9. เรียก `/captures/analysis` และคืน blockers, coverage, result groups,
+   cost-per-result ranking (best/worst) และ recommendations ต่อ reporting scope
 
 คำสั่ง:
 
@@ -109,6 +110,15 @@ scope, ID หรือ column mapping ยังไม่ยืนยัน.
 errors หรือ unpublished edits. Spending, CPA และ rankings ต้องรอ required metrics,
 stable IDs, reporting context และ alignment ที่ผ่านเกณฑ์.
 
+ผล JSON ของ `ads:agent` แสดง `context`, `result_groups`, `ranking.best` /
+`ranking.worst`, delivery counts และ recommendations ของแต่ละ scope. อันดับจะ
+ว่างเมื่อ scope ยังไม่พร้อม แทนที่จะเดาค่าหรือใช้ตำแหน่งแถวเป็นตัวตน.
+
+หน้าเว็บ **ข้อมูลจาก Extension** มีช่องยืนยันบริบทสำหรับการวิเคราะห์: timezone,
+attribution, ไม่มีตัวกรองรายงาน และไม่มี Breakdown ระบบส่งเฉพาะค่าที่ผู้ใช้
+กรอก/ติ๊กยืนยันเท่านั้นไปยัง `/captures/analysis` และเก็บค่าไว้ใน localStorage;
+ถ้าไม่ยืนยัน ระบบจะแสดง blockers ต่อไปแทนการเดา.
+
 Report setup แยก **blocking capture fields** (ชื่อ, IDs, Spend, Impressions,
 Results, Cost per result, Attribution) ออกจาก **goal metrics เสริม** เช่น Link
 clicks หรือ Messaging conversations. ถ้า Meta ภาษาไทยไม่มีคอลัมน์เดี่ยวหรือ
@@ -144,7 +154,7 @@ Workflow v1 ยังไม่ทำ:
 
 ก่อนเรียก DOM workflow ว่าใช้วิเคราะห์ราย Ads ได้:
 
-- อ่าน Ads ได้ครบตาม reported footer ภายใน scope ที่ตรวจ
+- อ่าน Ads ได้ครบตาม reported footer ภายใน scope ที่ footer อ้างถึง; Breakdown partition ที่เห็นเฉพาะ footer รวมทั้งรายงานใช้ verified lower bound และไม่ถือ `x/40` เป็น completeness
 - ได้ stable Ad ID และ parent IDs
 - มี Spend/Impressions/Results ตาม goal
 - column/row alignment aligned

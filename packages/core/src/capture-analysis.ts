@@ -153,7 +153,12 @@ export type LevelAnalysis = {
   blockers: string[];
   dedupe: "id" | "content_within_job" | "mixed" | "none";
   reported_total_rows: number | null;
-  coverage: "complete" | "partial" | "unknown";
+  /**
+   * Which scope the footer row count describes. Breakdown partitions can only
+   * see a report-wide footer, so it cannot certify the partition's total.
+   */
+  reported_total_scope: "report" | "partition" | "unknown";
+  coverage: "complete" | "partial" | "lower_bound" | "unknown";
   context: {
     account_id: string | null;
     breakdown: unknown;
@@ -358,7 +363,7 @@ export function analyzeRow(
   for (const cell of cleaned) {
     const key = canonicalHeader(cell.header);
     if (key === "attribution" && knownText(cell.text))
-      flags.push(`attribution:${cell.text.trim()}`);
+      flags.push(`attribution:${normalizeAttribution(cell.text)}`);
     if (key === "result_type" && knownText(cell.text))
       resultType = cell.text.trim();
     if (key === "spend" || key === "cost_per_result") {
@@ -455,6 +460,14 @@ const knownText = (v: unknown): v is string =>
   !/^(?:unknown|unverified|unspecified|n\/a|not set|ไม่ทราบ|ยังไม่ยืนยัน|[-—–]+)$/i.test(
     v.trim(),
   );
+/** One multiline attribution cell is a set of fragments, not an ordered label. */
+export function normalizeAttribution(value: string) {
+  const lines = value
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  return [...new Set(lines)].sort((a, b) => a.localeCompare(b, "th")).join(" · ");
+}
 function stableValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableValue);
   if (value && typeof value === "object")
@@ -495,9 +508,9 @@ function contextFor(snapshot: DomSnapshot, options: AnalysisOptions = {}) {
         : null,
     timezone: validTimezone,
     attribution: knownText(ctx.attribution)
-      ? ctx.attribution.trim()
+      ? normalizeAttribution(ctx.attribution)
       : knownText(options.operator?.attribution)
-        ? options.operator.attribution.trim()
+        ? normalizeAttribution(options.operator.attribution)
         : null,
     breakdown:
       explicitScopeValue(ctx.breakdown ?? snapshot.breakdown) ??
@@ -551,7 +564,7 @@ function scopedSnapshots(snapshots: DomSnapshot[]) {
             canonicalHeader(cell.header) === "attribution" &&
             knownText(cell.text),
         )
-        .map((cell) => cell.text.trim());
+        .map((cell) => normalizeAttribution(cell.text));
       if (values.length !== 1) continue;
       const known = attributionById.get(row.identity) ?? new Set<string>();
       known.add(values[0]);
@@ -573,7 +586,7 @@ function scopedSnapshots(snapshots: DomSnapshot[]) {
           (c) =>
             canonicalHeader(c.header) === "attribution" && knownText(c.text),
         )
-        .map((c) => c.text.trim());
+        .map((c) => normalizeAttribution(c.text));
       const knownById = row.identity
         ? attributionById.get(row.identity)
         : undefined;
@@ -628,6 +641,10 @@ function spendQuality(rows: AnalyzedRow[]): SpendQuality {
   const sources = new Set(rows.map((r) => r.spend_source));
   if (sources.size > 1) return "mixed";
   return sources.has("column") ? "reported" : "estimated";
+}
+function hasActiveBreakdown(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  return !!value && typeof value === "object" && Object.keys(value).length > 0;
 }
 const blockingRow = (r: AnalyzedRow) =>
   r.flags.some((f) =>
@@ -814,12 +831,26 @@ export function analyzeCaptureLevel(
     !!attribution &&
     context.breakdown !== null &&
     context.filters !== null;
+  const partitioned = hasActiveBreakdown(context.breakdown);
+  const reported_total_scope: LevelAnalysis["reported_total_scope"] =
+    reported === null ? "unknown" : partitioned ? "report" : "partition";
+  // A breakdown partition only has a report-wide footer. Never turn that into
+  // an x/40 completeness claim; the verified rows are a lower bound until Meta
+  // exposes a partition-specific total.
   const coverage: LevelAnalysis["coverage"] =
     reported === null
       ? "unknown"
-      : !blockers.size && verifiedRows.length === reported && reported > 0
-        ? "complete"
-        : "partial";
+      : partitioned
+        ? verifiedRows.length > 0
+          ? "lower_bound"
+          : "unknown"
+        : !blockers.size && verifiedRows.length === reported && reported > 0
+          ? "complete"
+          : "partial";
+  if (reported_total_scope === "report")
+    warnings.push(
+      "ตัวเลขจำนวนแถวท้ายรายงานเป็นยอดรวมทั้งรายงาน ไม่ใช่จำนวนรวมของกลุ่ม Breakdown นี้ ตัวเลขที่ยืนยันได้จึงเป็นขั้นต่ำและยังยืนยันความครบของกลุ่มย่อยไม่ได้",
+    );
   // Excluding unresolved rows is conservative: aggregates below explicitly cover only verified compatible rows.
   const comparable = contextReady ? verifiedRows : [];
   const groups = new Map<string, AnalyzedRow[]>();
@@ -873,14 +904,9 @@ export function analyzeCaptureLevel(
 
   const recs: Recommendation[] = [];
   const name = levelThai[level];
-  const payment = rows.filter((r) => r.delivery === "payment_error");
-  if (payment.length)
-    recs.push({
-      severity: "critical",
-      code: "payment_error",
-      message: `พบข้อความ "ข้อผิดพลาดในการชำระเงิน" ในหลักฐานที่อ่านได้ของ${name} ตรวจวิธีการชำระเงินในหน้าการเรียกเก็บเงินของ Meta จำนวนหลักฐานอาจซ้ำและไม่ใช่จำนวนเอนทิตีที่ยืนยันแล้ว`,
-      rows: [...new Set(payment.map(label))],
-    });
+  // payment_error remains a delivery observation and raw diagnostic. It is not
+  // a performance signal here: adding ad credit clears Meta's billing message,
+  // so it must not block or outrank results/spend/cost comparisons.
   // Comparisons against the median need at least three comparable rows.
   if (med !== null && eligible.length >= 3) {
     const pausedWinners = eligible.filter(
@@ -952,6 +978,13 @@ export function analyzeCaptureLevel(
       message: `ยืนยัน ID และคอลัมน์ได้ ${verifiedRows.length} จาก ${reported} แถวที่ Meta แจ้ง ผลรวมและอันดับเป็นเฉพาะแถวที่ยืนยันได้`,
       rows: [],
     });
+  if (coverage === "lower_bound")
+    recs.push({
+      severity: "warning",
+      code: "partition_total_unverified",
+      message: `ยืนยัน ID และคอลัมน์ได้ ${verifiedRows.length} แถวในกลุ่มนี้ แต่ตัวเลข ${reported} แถวบนหน้าคือยอดรวมทั้งรายงาน ไม่ใช่จำนวนรวมของกลุ่มย่อย จึงใช้เป็นขั้นต่ำได้เท่านั้นและยังยืนยันความครบของกลุ่มนี้ไม่ได้`,
+      rows: [],
+    });
   const missing: string[] = [];
   if (!rows.length || rows.some((r) => r.spend_source !== "column"))
     missing.push("spend");
@@ -999,6 +1032,7 @@ export function analyzeCaptureLevel(
           ? "id"
           : "content_within_job",
     reported_total_rows: reported,
+    reported_total_scope,
     coverage,
     context,
     columns: [...columns],
@@ -1038,12 +1072,13 @@ export function analyzeCaptureJob(
     for (const group of groups.values())
       levels.push(analyzeCaptureLevel(level, group, options));
   }
-  const critical = levels.flatMap((l) =>
-    l.recommendations.filter((r) => r.severity === "critical"),
-  );
   return {
     levels,
-    payment_error: critical.some((r) => r.code === "payment_error"),
+    // Diagnostic only. Keep the raw observation visible without treating it as
+    // a critical recommendation or a blocker for performance analysis.
+    payment_error: levels.some(
+      (l) => (l.delivery_observation_counts.payment_error ?? 0) > 0,
+    ),
     data_quality: {
       identity: !levels.some((l) => l.observed_rows > 0)
         ? "missing"
@@ -1060,6 +1095,7 @@ export function analyzeCaptureJob(
         level: l.level,
         captured: l.unique_rows,
         reported: l.reported_total_rows,
+        reported_scope: l.reported_total_scope,
         coverage: l.coverage,
       })),
     },

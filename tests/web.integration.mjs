@@ -138,6 +138,15 @@ try {
     page.getByRole("heading", { name: "ผ่านการตรวจรูปแบบข้อมูล" }),
   ).toBeVisible();
   await expect(
+    page.getByText("กระทบยอดไฟล์นี้แล้ว", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "จำนวนแถวและ Spend ตรงกับที่ระบุสำหรับไฟล์นี้ แต่ยังไม่ยืนยันความครบทั้งบัญชี",
+      { exact: false },
+    ),
+  ).toBeVisible();
+  await expect(
     page.getByRole("button", { name: "บันทึกลงฐานข้อมูล", exact: true }),
   ).toBeEnabled();
   await page.getByLabel("Spend รวม", { exact: true }).fill("201");
@@ -147,6 +156,9 @@ try {
   await page.getByRole("button", { name: "ตรวจสอบข้อมูล", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "พบข้อผิดพลาดในไฟล์" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("ยอดที่ระบุไม่ตรงกับไฟล์", { exact: true }),
   ).toBeVisible();
   await page.getByLabel("Spend รวม", { exact: true }).fill("200");
   await page.getByRole("button", { name: "ตรวจสอบข้อมูล", exact: true }).click();
@@ -158,6 +170,9 @@ try {
     .click();
   await expect(page.locator(".below-panel tbody")).toContainText(
     "frontend-test.csv",
+  );
+  await expect(page.locator(".below-panel tbody")).toContainText(
+    "กระทบยอดไฟล์แล้ว",
   );
   await page
     .locator("nav")
@@ -172,6 +187,8 @@ try {
   const data = JSON.parse(await readFile(await downloaded.path(), "utf8"));
   expect(data.records).toHaveLength(1);
   expect(data.coverage).toBe("unverified");
+  expect(data.source_counts.csv).toBe(1);
+  expect(data.source_counts.dom_capture).toBe(0);
   const csvDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "ส่งออก CSV", exact: true }).click();
   const csvFile = await csvDownload;
@@ -208,6 +225,9 @@ try {
   expect(analysisData.rows[0].evaluation.status).toBe("blocked");
   expect(analysisData.rows[0].evaluation.next_steps.length).toBeGreaterThan(0);
   expect(analysisData.coverage).toBe("unverified");
+  expect(analysisData.scope_coverage).toBe("unverified");
+  expect(analysisData.source_mix.csv).toBeGreaterThan(0);
+  expect(analysisData.verified_import_rows).toBe(2);
   await page
     .getByRole("button", { name: "ตั้งคอลัมน์วิเคราะห์ใน Meta", exact: true })
     .click();

@@ -373,12 +373,16 @@ export async function prepareReportColumns(options: {
 export type ReportField = {
   key: string;
   labels: string[];
+  /** Read-only aliases used when matching rendered table headers. */
+  header_labels?: string[];
   /** Search-only aliases. Exact labels still decide which checkbox is selected. */
   search_terms?: string[];
   /** Context terms that identify a similarly named but unrelated option. */
   exclude_terms?: string[];
   /** Preferred surrounding context when Meta renders more than one exact label. */
   prefer_terms?: string[];
+  /** Only match an already-checked choice. Used when pruning a specific column. */
+  checked_only?: boolean;
   required: boolean;
   /** Required for a trustworthy reporting view before Save. Goal-only metrics
    * may be reported missing without blocking a read-only capture. */
@@ -396,15 +400,22 @@ export function getReportFields(goal: "messages" | "sales" | "leads") {
     {
       key: "campaign_name",
       labels: ["Campaign name", "ชื่อแคมเปญ"],
+      header_labels: ["Campaign", "แคมเปญ"],
       required: true,
       blocking: true,
     },
     {
       key: "ad_set_name",
       labels: ["Ad set name", "ชื่อชุดโฆษณา"],
+      header_labels: ["Ad set", "ชุดโฆษณา"],
       required: false,
     },
-    { key: "ad_name", labels: ["Ad name", "ชื่อโฆษณา"], required: false },
+    {
+      key: "ad_name",
+      labels: ["Ad name", "ชื่อโฆษณา"],
+      header_labels: ["Ad", "โฆษณา"],
+      required: false,
+    },
     { key: "budget", labels: ["Budget", "งบประมาณ"], required: false },
     {
       key: "campaign_id",
@@ -427,6 +438,7 @@ export function getReportFields(goal: "messages" | "sales" | "leads") {
     {
       key: "spend",
       labels: ["Amount spent", "จำนวนเงินที่ใช้จ่ายไป", "จำนวนเงินที่ใช้ไป"],
+      header_labels: ["Amount spent", "ยอดใช้จ่าย", "จำนวนเงินที่ใช้จ่ายไป"],
       search_terms: ["ใช้จ่าย", "Amount spent"],
       exclude_terms: ["เป็นเปอร์เซ็นต์", "percentage"],
       prefer_terms: ["ผลลัพธ์และการใช้จ่าย", "เงินใช้จ่าย"],
@@ -451,6 +463,7 @@ export function getReportFields(goal: "messages" | "sales" | "leads") {
     {
       key: "results",
       labels: ["Results", "ผลลัพธ์"],
+      header_labels: ["Results", "ผลลัพธ์"],
       exclude_terms: ["ROAS", "ผลตอบแทนจากค่าใช้จ่ายในการโฆษณา"],
       prefer_terms: ["ผลลัพธ์และการใช้จ่าย"],
       required: true,
@@ -459,6 +472,7 @@ export function getReportFields(goal: "messages" | "sales" | "leads") {
     {
       key: "cost_per_result",
       labels: ["Cost per result", "ต้นทุนต่อผลลัพธ์"],
+      header_labels: ["Cost per result", "ต้นทุนต่อผลลัพธ์"],
       required: true,
       blocking: true,
     },
@@ -483,6 +497,11 @@ export function getReportFields(goal: "messages" | "sales" | "leads") {
     {
       key: "attribution",
       labels: ["Attribution setting", "การตั้งค่าการระบุที่มา"],
+      header_labels: [
+        "Attribution setting",
+        "การตั้งค่าการระบุที่มา",
+        "การตั้งค่าการกำหนดแอตทริบิวชัน",
+      ],
       required: true,
       blocking: true,
     },

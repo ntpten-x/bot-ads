@@ -3,6 +3,13 @@ const b=await build({entryPoints:['apps/extension/src/report-probe.ts'],bundle:t
 const browser=await chromium.launch({channel:'chromium',headless:true});const page=await browser.newPage();
 await page.route('https://adsmanager.facebook.com/**',r=>r.fulfill({contentType:'text/html; charset=utf-8',body:'<div role="dialog" aria-label="ปรับแต่งคอลัมน์"><li><input type="checkbox"><span>ID โฆษณา</span><span> ชื่อและ ID ของวัตถุ &gt; ชื่อและ ID ของวัตถุ</span></li></div>'}));
 try{await page.goto('https://adsmanager.facebook.com/adsmanager/manage/ads?act=123');await page.addScriptTag({content:b.outputFiles[0].text});const p=await page.evaluate(()=>Probe.probeReportTarget({account:'123',op:'field',field:{key:'ad_id',labels:['ID โฆษณา'],required:true}}));expect(p.kind).toBe('click');
+// Selected extras can use div-based rows without listitem wrappers, and Meta can
+// keep a selected category collapsed while its control remains in the DOM.
+await page.evaluate(()=>{document.body.insertAdjacentHTML('beforeend','<div id="headers"><div role="columnheader">Ad</div><div role="columnheader">Purchases</div><div role="columnheader">ROAS</div></div>');document.querySelector('[role="dialog"]').innerHTML='<div><input checked type="checkbox"><span>Purchases</span></div><div style="display:none"><div><input checked type="checkbox"><span>ROAS (cost)</span></div></div>';});
+const choices=await page.evaluate(()=>Probe.probeReportTarget({account:'123',op:'checked'}));
+expect(choices.checked_choices).toEqual(expect.arrayContaining([expect.objectContaining({label:'Purchases',checked:true}),expect.objectContaining({label:'ROAS (cost)',checked:true})]));
+const headers=await page.evaluate(()=>Probe.probeReportTarget({account:'123',op:'table_headers'}));
+expect(headers.kind).toBe('done');expect(headers.headers).toEqual(['Ad','Purchases','ROAS']);
 // A helper/category name is not the name of the checkbox it describes.
 await page.evaluate(()=>document.querySelector('[role="dialog"]').innerHTML='<li><input type="checkbox"><span>Budget</span><span>Amount spent</span></li>');
 const helper=await page.evaluate(()=>Probe.probeReportTarget({account:'123',op:'field',field:{key:'spend',labels:['Amount spent'],required:true}}));

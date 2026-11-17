@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   botCommandSchema,
+  needsReportingNavigation,
   reportingUrl,
   suiteUrl,
 } from "../packages/core/src/control.js";
@@ -91,4 +92,71 @@ test("reporting URLs preserve only validated breakdown parameters", () => {
   assert.throws(() =>
     reportingUrl("123", "ads", [["demographics_breakdown", "age&evil=1"]]),
   );
+});
+
+test("reuse an already-applied reporting view without reloading Meta", () => {
+  const breakdown = [
+    ["demographics_breakdown", "age"],
+    ["publisher_platform_breakdown", "platform"],
+  ] as const;
+  assert.equal(
+    needsReportingNavigation(
+      "https://adsmanager.facebook.com/adsmanager/manage/ads?act=123&demographics_breakdown=age&publisher_platform_breakdown=platform&date_preset=last_30d",
+      "123",
+      "ads",
+      breakdown,
+    ),
+    false,
+  );
+  assert.equal(
+    needsReportingNavigation(
+      "https://business.facebook.com/adsmanager/manage/ads/?publisher_platform_breakdown=platform&act=123&demographics_breakdown=age",
+      "123",
+      "ads",
+      [...breakdown].reverse(),
+    ),
+    false,
+  );
+  for (const [raw, account, level, params] of [
+    [
+      "https://adsmanager.facebook.com/adsmanager/manage/ads?act=999&demographics_breakdown=age",
+      "123",
+      "ads",
+      breakdown,
+    ],
+    [
+      "https://adsmanager.facebook.com/adsmanager/manage/adsets?act=123&demographics_breakdown=age",
+      "123",
+      "ads",
+      breakdown,
+    ],
+    [
+      "https://adsmanager.facebook.com/adsmanager/manage/ads?act=123&demographics_breakdown=gender",
+      "123",
+      "ads",
+      breakdown,
+    ],
+    [
+      "https://adsmanager.facebook.com/adsmanager/manage/ads?act=123&demographics_breakdown=age&demographics_breakdown=age",
+      "123",
+      "ads",
+      breakdown,
+    ],
+    [
+      "https://adsmanager.facebook.com/adsmanager/manage/ads?act=123&demographics_breakdown=age&publisher_platform_breakdown=platform%26evil%3D1",
+      "123",
+      "ads",
+      breakdown,
+    ],
+    [
+      "https://adsmanager.facebook.com/adsmanager/manage/ads?act=123&act=123&demographics_breakdown=age",
+      "123",
+      "ads",
+      breakdown,
+    ],
+  ] as const)
+    assert.equal(
+      needsReportingNavigation(raw, account, level, params),
+      true,
+    );
 });

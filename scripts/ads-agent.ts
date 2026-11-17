@@ -1,6 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { z } from "zod";
+import type { CaptureJobAnalysis } from "../packages/core/src/capture-analysis.js";
 
 type Goal = "messages" | "sales" | "leads";
 type TerminalJobStatus = "needs_review" | "error";
@@ -12,6 +13,7 @@ type AgentOptions = {
   maxSteps: number;
   skipPrepare: boolean;
   skipNavigate: boolean;
+  scanColumns: boolean;
   collectionTimeoutMs: number;
   breakdown: BreakdownDimension[];
   operator: {
@@ -55,6 +57,7 @@ type CommandReceipt = {
         ok?: boolean;
         applied?: boolean;
         selected?: string[];
+        pruned?: string[];
         missing_required?: string[];
         missing_goal_metrics?: string[];
         error?: string;
@@ -226,7 +229,7 @@ async function prepareReport(
     command: "report.prepare",
     goal,
   });
-  const receipt = await waitForCommand(device, queued.id, 150_000);
+  const receipt = await waitForCommand(device, queued.id, 260_000);
   const report = receipt.result?.ui?.report;
   if (
     receipt.status !== "done" ||
@@ -242,6 +245,7 @@ async function prepareReport(
   return {
     applied: report?.applied === true,
     selected: report?.selected ?? [],
+    pruned: report?.pruned ?? [],
     missing_required: report?.missing_required ?? [],
     missing_goal_metrics: report?.missing_goal_metrics ?? [],
   };
@@ -314,14 +318,15 @@ async function collect(
   account: string,
   maxSteps: number,
   timeoutMs: number,
+  scanColumns: boolean,
 ) {
   const queued = await sendCommand(device, {
     command: "start",
     levels: ["ads"],
     maxSteps,
-    scan_columns: true,
+    scan_columns: scanColumns,
   });
-  const receipt = await waitForCommand(device, queued.id, 30_000);
+  const receipt = await waitForCommand(device, queued.id, 90_000);
   const jobId = receipt.result?.job?.id;
   if (receipt.status !== "done" || !jobId)
     throw new Error(receipt.result?.error ?? "Collection did not start");
@@ -350,16 +355,8 @@ async function waitForCaptures(
   ).filter((capture) => capture.job_id === jobId);
 }
 
-type LevelSummary = {
-  level: string;
-  coverage: string;
-  observed_rows: number;
-  unique_rows: number;
-  unresolved_observations: number;
-  reported_total_rows: number | null;
-  missing_columns: string[];
-  blockers: string[];
-  recommendations: { code: string; severity: string; message: string }[];
+type AnalysisResponse = CaptureJobAnalysis & {
+  job: { status: string; error?: string; level_warnings?: string[] };
 };
 
 async function analyze(
@@ -372,13 +369,7 @@ async function analyze(
   url.searchParams.set("job_id", jobId);
   for (const [key, value] of Object.entries(operator))
     if (value !== undefined) url.searchParams.set(key, String(value));
-  const result = await api<{
-    job: { status: string; error?: string; level_warnings?: string[] };
-    data_quality: Record<string, unknown>;
-    levels: LevelSummary[];
-    payment_error: boolean;
-    notice: string;
-  }>(`${url.pathname}${url.search}`);
+  const result = await api<AnalysisResponse>(`${url.pathname}${url.search}`);
   return result;
 }
 
@@ -421,6 +412,7 @@ export function parseAgentOptions(args: string[]): AgentOptions {
     ),
     skipPrepare: flags.includes("--skip-prepare"),
     skipNavigate: flags.includes("--skip-navigate"),
+    scanColumns: !flags.includes("--no-scan-columns"),
     collectionTimeoutMs:
       parsePositiveInteger(timeoutRaw?.split("=")[1], 300) * 1_000,
     breakdown,
@@ -443,7 +435,7 @@ export function parseAgentOptions(args: string[]): AgentOptions {
 }
 
 export async function runAdsAgent(options: AgentOptions) {
-  const minimumVersion = process.env.AGENT_MIN_EXTENSION_VERSION ?? "0.6.22";
+  const minimumVersion = process.env.AGENT_MIN_EXTENSION_VERSION ?? "0.6.41";
   const verified = await verifyDevice(options.device, minimumVersion);
   log("device_ready", {
     account: verified.account,
@@ -470,6 +462,7 @@ export async function runAdsAgent(options: AgentOptions) {
     verified.account,
     options.maxSteps,
     options.collectionTimeoutMs,
+    options.scanColumns,
   );
   const persisted = await waitForCaptures(
     verified.account,
@@ -493,15 +486,27 @@ export async function runAdsAgent(options: AgentOptions) {
     data_quality: analysis.data_quality,
     payment_error: analysis.payment_error,
     levels: analysis.levels.map((level) => ({
+      scope_key: level.scope_key,
       level: level.level,
+      snapshots: level.snapshots,
       coverage: level.coverage,
       reported_total_rows: level.reported_total_rows,
+      reported_total_scope: level.reported_total_scope,
       observed_rows: level.observed_rows,
       unique_rows: level.unique_rows,
+      verified_unique_rows: level.verified_unique_rows,
       unresolved_observations: level.unresolved_observations,
+      spend_quality: level.spend_quality,
+      dedupe: level.dedupe,
+      context: level.context,
       missing_columns: level.missing_columns,
       blockers: level.blockers,
+      result_groups: level.result_groups,
+      ranking: level.ranking,
+      delivery_counts: level.delivery_counts,
+      delivery_observation_counts: level.delivery_observation_counts,
       recommendations: level.recommendations,
+      warnings: level.warnings,
     })),
     notice: analysis.notice,
   };
@@ -513,7 +518,7 @@ async function main() {
   const args = process.argv.slice(2);
   if (!args.length || args.includes("--help")) {
     console.log(
-      "Usage: npm run ads:agent -- DEVICE_UUID [messages|sales|leads] [--max-steps=12] [--timeout-seconds=300] [--skip-prepare] [--skip-navigate]",
+      "Usage: npm run ads:agent -- DEVICE_UUID [messages|sales|leads] [--max-steps=12] [--timeout-seconds=300] [--skip-prepare] [--skip-navigate] [--no-scan-columns]",
     );
     return;
   }

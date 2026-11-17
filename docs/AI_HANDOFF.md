@@ -3,7 +3,12 @@
 งาน Ads automation/Breakdown รอบล่าสุดมีรายละเอียดส่งต่อที่
 [HANDOFF_ADS_AUTOMATION_2026-11-16.md](HANDOFF_ADS_AUTOMATION_2026-11-16.md)
 
-เอกสารส่งต่องาน ณ 16 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.22 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+สถานะรวมถึง CSV-first reconciliation และ source separation ณ 17 พฤศจิกายน 2026 อยู่ที่
+[HANDOFF_ADS_ANALYSIS_2026-11-17.md](HANDOFF_ADS_ANALYSIS_2026-11-17.md)
+
+เอกสารส่งต่องาน ณ 17 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.41 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+
+CSV-first analysis รอบ 17 พฤศจิกายน 2026 เพิ่ม `reconciliation` และ `scope_coverage` ใน shared import contract: การกระทบยอดจำนวนแถว/Spend ยืนยันเฉพาะ scope ของไฟล์ ไม่ยกระดับ `coverage` ทั้งบัญชีจาก `unverified` Backend ประทับ `raw._import_reconciliation` หลัง validation และ Analysis แยกกลุ่ม `csv`/`dom_capture`/`unknown` โดยไม่บวกยอดข้ามแหล่ง อย่าลบ proof นี้หรือรวมยอด CSV กับ DOM แม้ ID/เงื่อนไขจะตรงกัน; รายละเอียดและผลทดสอบอยู่ใน [ANALYSIS.md](ANALYSIS.md) และ [VALIDATION.md](VALIDATION.md)
 
 0.6.6 เพิ่ม read-only orchestrator `npm run ads:agent` ที่ตรวจ device/version/account, navigate, เรียก report setup, เริ่มเก็บ Ads, รอ PostgreSQL capture และสรุปผลวิเคราะห์; เพิ่ม Thai/partial search aliases และ bounded candidate diagnostics. Live probe พบว่า spend ถูกเลือกแต่ final recheck ทำให้หลุด, link clicks ถูก clip และ messaging ไม่มีคอลัมน์เดี่ยวใน UI ไทย
 
@@ -38,6 +43,52 @@
 0.6.21 map Age/Gender breakdown subrows ตามแกน Y ใต้ stable-ID parent row, อ่าน metric cells จากแถว subrow ตาม header และสร้าง grain แยกมิติโดยไม่ใช้ชื่อหรือตำแหน่งเป็น identity ข้ามหน้า
 
 0.6.22 copy status/result type จาก stable-ID parent ไปยัง breakdown subrow โดยไม่คัดลอกยอดรวม, ยืนยัน row-level breakdown แม้ page base เป็น null, และรอ busy marker ของ Meta ก่อนเปิด Breakdown menu
+
+0.6.23 prune คอลัมน์รายงานส่วนเกินที่ค้างจาก preset เดิมผ่าน trusted UI ก่อน Save, รอ column menu พร้อมสูงสุด 15 วินาที, ตรวจการล้าง search และยืนยันว่าไม่มีคอลัมน์นอก allowlist ก่อนบันทึก; เริ่ม horizontal scan เฉพาะเมื่อมี overflow จริงเพื่อหยุด diagnostic loop หลังอ่าน slice ครบ. Agent แสดง `report_columns.pruned` เพื่อระบุคอลัมน์ที่ถูกนำออก
+
+0.6.24 แก้ live failure ของ 0.6.23 ที่ Meta แสดง Reach สองรายการชื่อเดียวกัน: prune matcher เลือกเฉพาะ exact label ที่ checked อยู่แล้ว, ใช้ trusted input กับ candidate ที่ระบุ และยืนยันการปลดด้วย label + context หลังคลิก. เพิ่ม fixture duplicate Reach เพื่อไม่ให้ unchecked variant ถูกสลับหรือทำให้ matcher เป็น ambiguous
+
+0.6.25 แก้ live failure ของ 0.6.24 ที่ checkbox ที่ต้อง prune ถูก clip อยู่นอก scroll pane แม้ search แคบแล้ว: probe รายงาน scroll container ภายใน dialog, ใช้ trusted mouse wheel เลื่อนเฉพาะ column list, เลือก candidate ที่ checked ตรง label + context และยืนยันสถานะหลังคลิก. Fixture บังคับ list สูง 2 แถวเพื่อทดสอบ clipping จริง
+
+0.6.26 แก้ live failure ของ 0.6.25 ที่ยังหา scroll container ไม่ครบ: รองรับกรณี dialog เองเป็น scroller/fallback และยืนยันจุดคลิกด้วย hit-tested field probe แทนพิกัดจาก checked list อย่างเดียว. Trace เก็บ choice_scroll, match count และสถานะ target หลังคลิก; fixture clipping ผ่าน
+
+0.6.27 แก้ live failure ของ 0.6.26 ที่ Meta เปลี่ยน context ของตัวเลือกหลัง trusted search: prune จับคู่ label + checked state แทน context และยืนยันผลหลังคลิกด้วยการตรวจว่าไม่มี checked choice ที่ใช้ label เดิมเหลืออยู่ จึงไม่สลับกับ duplicate sibling ที่ unchecked. Fixture เปลี่ยน context ของ Reach หลังคลิกและยัง prune ผ่าน; ยังต้อง reload และยืนยันกับ Meta จริง
+
+0.6.28 แก้ live failure ของ 0.6.27 ที่ `report.prepare` สำเร็จแต่ `start` navigate ซ้ำไปยัง reporting URL ทำให้ Meta reset transient column view: เพิ่ม `needsReportingNavigation` ให้ใช้แท็บเดิมเมื่อ host/route/account/level/validated `*_breakdown` ตรงกัน และยัง foreground/maximize แท็บก่อนเริ่มอ่าน. Unit test ครอบคลุม route ต่างระดับ บัญชีต่าง ค่า Breakdown ต่าง/ซ้ำ และ query ที่ไม่ผ่าน allowlist
+
+0.6.29 ปิด false-positive ของ `report.prepare`: ใช้ rendered column headers เป็นรายการคอลัมน์ส่วนเกินที่อาจไม่ถูก render ใน dialog, รองรับ choice row แบบ div/ซ่อนอยู่ใน category, prune ด้วย trusted search/checkbox และตรวจ header จริงหลัง Save. `applied=true` ได้เฉพาะเมื่อ blocking fields ปรากฏบนตารางและไม่มี header ส่วนเกินค้างอยู่; dialog ปิดอย่างเดียวไม่ถือว่าสำเร็จ
+
+0.6.30 แก้ live failure ของ 0.6.29: Meta แสดงแผง `เลือกไว้ N คอลัมน์` พร้อมปุ่มลบต่อแถว ซึ่ง probe แบบ checkbox มองไม่เห็น. เพิ่ม read-only `selected_columns` probe ที่อ่านชื่อคอลัมน์และพิกัดปุ่มลบภายในแผงเท่านั้น แล้ว prune ผ่าน trusted click ทีละรายการพร้อม scroll; fallback checkbox path ยังคงอยู่สำหรับ layout ที่ไม่มีแผงนี้. `ปิด / เปิด` (สถานะการนำส่ง) ถูกเก็บไว้ ไม่ถูกนับเป็นคอลัมน์ส่วนเกิน. Live 0.6.30 ผ่าน column setup/Age mapping และสร้าง 6 Age scopes พร้อม ID/Spend/Impressions/Results/result type; coverage ยัง partial จาก `visible_rows_unchanged` และ Attribution หลายบรรทัด จึงไม่ถือว่า complete หรือเต็มบัญชี
+
+0.6.31 แก้หลักฐาน Age subrow ที่ทำให้เกิด scope เทียม: จับกลุ่มข้อความตาม cell owner (left edge + ความสูงของ cell) แทนการเดาคอลัมน์จากพิกัดของแต่ละบรรทัด จึงเก็บ Attribution หลายบรรทัดครบและไม่ย้ายบรรทัด `หรือการดูในช่วง` ไปเป็นชื่อชุดโฆษณา. เพิ่มการ normalize Attribution ซ้ำ/หลายลำดับใน shared analysis ให้อยู่ใน scope เดียว และเพิ่ม `reporting_bottom_reached` เมื่อ scroll owner อยู่ท้ายตารางจริง โดยไม่รายงานเป็น `visible_rows_unchanged`. Fixture ผ่านทั้ง cell ownership, dedupe และ bottom detection; live 0.6.31 ภายหลังไม่ผ่าน coverage acceptance เพราะ paging ค้างที่หน้าสุดท้าย
+
+0.6.32 แก้ live coverage failure ของ 0.6.31: งานก่อนหน้าทิ้ง virtualized body ไว้ท้ายตาราง งานใหม่จึงจับเฉพาะ Ads ห้าตัวสุดท้ายซ้ำ และ scroll log นับว่า moved เพราะ fingerprint มี `scroll_top`. รุ่นนี้ reset reporting rows ที่ `step === 0`, re-query แถวหลัง repaint ก่อน `scrollIntoView`, และใช้เฉพาะจำนวนแถวกับ stable identities เป็นหลักฐาน paging; body offset ที่เปลี่ยนแต่ identities เดิมจะคืน `reporting_body_moved_rows_unverified`. Fixture ผ่านทั้ง reset-from-bottom และ identity-stable false paging; live acceptance ต้อง reload 0.6.32 และรัน Age ซ้ำ
+
+0.6.32 live หลัง reload ไม่ผ่าน coverage acceptance: 20 snapshots จบ `needs_review`, ยังได้ 2–5 verified Ads ต่อ Age scope จาก 40 แถว และมีเพียงห้า parent Ad IDs. จำนวนแถวที่มองเห็นสลับ 24/21 เพราะแถวหนึ่งหลุดขอบ จึงทำให้ `scroll_log` ทั้ง 19 รายการเป็น false positive. `row_reset` รายงาน `already_at_start` เพราะ diagnostics ไม่พบ body scroller. 0.6.33 จึงบังคับหลักฐาน paging เป็น identity ใหม่ผ่าน `row_fingerprints`, ลดการนับ row count/`scroll_top`/hover เป็น movement, ขยาย native wheel plan ไปยัง gutter ขวาและคอลัมน์ที่ปลอดภัยโดยคง strict control exclusion, จำกัด 10 targets/60 probes/12 วินาที และให้ gutter target มี band index ไม่ซ้ำ. Fixture ผ่านครบ; live acceptance ของ 0.6.33 ยังต้อง reload และรัน Age ใหม่
+
+0.6.33 live หลัง reload ยังไม่ผ่าน: ได้ 1 snapshot, จบ `needs_review`, ยังเป็นห้า parent Ad IDs และ `visible_rows_unchanged`. scroll log แสดง target ทั้ง 10 เป็น metric bands, `body_offsets` ว่างทั้งหมด และไม่ได้ probe gutter/scrollbar เพราะ gutter คำนวณจาก `scopeRect.right` ที่อาจอยู่นอกจอ และ loop gutter ทำงานหลัง metric bands ใช้ budget 10 ครบแล้ว. 0.6.34 จึง probe `[role="scrollbar"]` และ gutter จาก visible right edge (`min(scopeRect.right, innerWidth)`) ก่อน column bands, เพิ่ม `scroll_diagnostics` (scope rect, visible right, scrollbar geometry, body target count) และมี fixture ตารางกว้าง 12 metric columns + scrollbar ที่มองเห็นเพื่อยืนยันว่า body target ยังได้ budget. ต้อง reload 0.6.34 และรัน Age ใหม่ก่อนอ้าง acceptance
+
+0.6.34 live ยังไม่ถึง collection เพราะ `breakdown_input_timeout` สองครั้ง ทั้งที่ URL มี `demographics_breakdown=age` แล้ว: เมนู Breakdown ค้างเปิด, มี Columns search ที่มองเห็น, และ setup ยังวนค้นหาทุกมิติแทนที่จะรับสถานะที่ apply แล้ว. 0.6.35 จึง early-return เมื่อ requested dimensions active ครบและไม่มีมิติอื่น active, ปิดเมนูที่เปิดด้วย guarded Escape, ข้ามมิติที่ไม่ requested/ไม่ active ก่อน search, และตรวจ loading เฉพาะ progressbar/`aria-busy` ที่มองเห็นแทนการสแกน body text ทั้งหน้า. Fixture ยืนยันว่า setup Age ซ้ำไม่สร้าง trusted click เพิ่ม; live acceptance ยังต้อง reload 0.6.36
+
+0.6.35 live ยืนยัน Breakdown fix (`ok=true`, menu ปิด) แต่ collection ด้วย `--no-scan-columns` ค้างที่ `step=1` เกินห้านาทีโดยไม่มี `scroll_log` เพราะ debugger promise ของ native wheel ไม่ resolve และ worker `busy` ค้าง. 0.6.36 จึงห่อ `attach`/`sendCommand`/`detach` ด้วย timeout 6 วินาทีและคืน reason `debugger_*_timeout`; fixture ที่ทำให้ `sendCommand` ไม่ resolve ยืนยันว่ากลับภายใน 20 วินาที. ต้อง reload 0.6.36 และรัน Age ด้วย `--no-scan-columns`
+
+0.6.36 live ผ่านเรื่อง timeout: collection จบโดยไม่ค้าง แต่ได้ snapshot เดียวและ `needs_review`; ทุก paging attempt คืน `visible_rows_unchanged` จึงยังเห็น parent Ad IDs แค่ห้าตัวแรกในหลาย Age scope เทียบ footer 40 แถว. หลักฐาน DOM ชี้ว่า Meta ใช้ custom vertical scrollbar ด้านขวาเป็น `div` แคบ/สูงที่ไม่มี `role="scrollbar"` และไม่ใช่ ancestor ของ rows จึงไม่ปรากฏใน `body_offsets`. 0.6.37 จึงตรวจ custom track/thumb จาก geometry ภายใน reporting scope และส่ง trusted CDP mouse drag ภายใต้ lease/account/job guards ทุกคำสั่ง; นับ movement เฉพาะเมื่อ row fingerprints มี identity ใหม่และคืน `native_scrollbar_drag`. ต้อง reload 0.6.37 แล้วรัน Age ซ้ำก่อนอ้าง coverage/live acceptance
+
+0.6.37 live รอบแรกได้ 8 snapshots และ coverage 26–35 แถวต่อ Age scope แต่ DOM paging ผ่าน 7 ครั้งแล้ว native path timeout ที่ step 8 เพราะ deadline 12 วินาทีสั้นเกินไป. รอบสองบน view เดิมได้ snapshot เดียวและ probe ไม่เห็น scrollbar (`attempted_scrollbar=false`, no candidates) แม้ไม่มีการเปลี่ยน row identity. Fixture/DOM ยืนยันว่า custom scrollbar ของ Meta ถูกเปิดเผยหลัง pointer hover. 0.6.38 จึง re-probe หลัง trusted hover ทุก target, drag thumb ที่เพิ่งปรากฏก่อน wheel, และขยาย overall deadline เป็น 30 วินาทีโดยคง debugger timeout 6 วินาทีต่อคำสั่ง. Live acceptance ต้อง reload 0.6.38 และรัน Age ใหม่
+
+0.6.38 live หลัง reload และเปิด lease ใหม่ยังไม่ผ่าน coverage: one snapshot, `needs_review`, ห้า parent Ad IDs ชุดเดิม, `visible_rows_unchanged` และ `attempted_scrollbar=false`; ไม่มี scrollbar candidates/geometry. `payment_error=true` ยังเป็น diagnostic เท่านั้นและไม่มี payment recommendation. การตรวจ DOM ชี้ว่า custom scrollbar อาจเป็น sibling ของ reporting scope จึงอยู่นอกขอบเขตที่ 0.6.38 ค้นหา. 0.6.39 ค้นหา track ใน reporting ancestors สูงสุดสี่ชั้น, เพิ่ม right-edge hover points ก่อน target budget เต็ม และไม่ส่ง wheel ซ้ำบน hover-only target; fixture วาง track นอก scope และผ่าน trusted hover → drag → identity change → detach. ยังต้อง reload 0.6.39 และรัน Age ด้วย `--no-scan-columns` ก่อนอ้าง coverage/live acceptance
+
+0.6.39 แยก `payment_error` เป็น delivery diagnostic เท่านั้น: เก็บ `delivery_observation_counts.payment_error` และ `analyzeCaptureJob().payment_error` ไว้ดูหลักฐาน แต่ไม่สร้าง recommendation, ไม่จัดอันดับ และไม่บล็อกการประเมินผล เพราะผู้ใช้ยืนยันว่าเมื่อเติมเครดิตโฆษณา ข้อความนี้จะหายไป. ห้ามนำ `payment_error` กลับมาเป็น critical/blocker เว้นแต่ผู้ใช้เปลี่ยนข้อกำหนด
+
+0.6.39 live หลัง reload/lease ผ่านการตั้งคอลัมน์และ Age Breakdown แต่ยังได้หนึ่ง snapshot และ `needs_review`. Diagnostics พบ custom scrollbar จริง (`attempted_scrollbar=true`, track 1102px, thumb 131px) แต่ thumb อยู่ท้ายราง จึงไม่สามารถ drag ลงเพื่อเปิดแถวใหม่ได้. 0.6.40 เพิ่ม native reset ที่ลาก thumb ขึ้นบนสุดก่อน snapshot แรก, เปิดเผย `track_top`/`thumb_top`/`at_top`/`at_bottom`, ยอมรับ reset เฉพาะเมื่อ thumb ถึงบนและ row signature เปลี่ยน, และมี fixture ที่เริ่มจาก thumb ท้ายราง.
+
+0.6.40 live หลัง reload/lease ด้วย job `b344acdc-1d78-467c-a27f-b0056021c642` ดีขึ้นเป็น 8 snapshots, 196 observations และ 35 unique parent Ad IDs แต่ยังจบ `needs_review`; coverage ต่อ Age scope เทียบ footer 40 แถวเป็น 18–24: 34, 25–34: 35, 35–44: 32, 45–54: 26, 55–64: 26 และ 65+: 27 ทุก scope ยัง partial ห้ามรวมยอดหรืออ้าง whole-account coverage. Steps 1–2 เลื่อนด้วย wheel, steps 3–7 ด้วย `scroll_into_view`, step 8 คืน `visible_rows_unchanged`. Native reset ยัง fail ด้วย `reporting_view_changed_before_input` ขณะที่ DOM reset รายงาน `already_at_start`; custom scrollbar ที่ step 8 มี track top 311 สูง 1102, thumb top 1277 สูง 131 และ thumb bottom ห่างท้ายรางเพียง ~5px แต่ `at_bottom` เดิมใช้ tolerance 2px จึงไม่ถูกนับว่าถึงท้าย. `payment_error=true` ยังเป็น diagnostic และไม่มี payment recommendation; `missing_goal_metrics` คือ `link_clicks`, `messaging_conversations`.
+
+0.6.41 แก้จุดที่ทำให้ step สุดท้ายตีความผิด: ใช้ edge tolerance แบบจำกัด 8px สำหรับ native body และ custom scrollbar, ให้ `target_diagnostics.at_bottom` นับ custom scrollbar ที่ถึงท้ายด้วย, และหลัง debugger attach จะ rebase เฉพาะเมื่อ view นิ่งติดกันสอง probe; view ที่ยังเปลี่ยนต่อเนื่องยัง fail closed. Fixtures เพิ่มเคส thumb เหลือช่องว่าง 5px และ repaint หนึ่งครั้งหลัง attach ก่อน reset สำเร็จ. ต้อง reload 0.6.41, เปิด lease ใหม่ และรัน Age ด้วย `--no-scan-columns` ก่อนอ้าง live acceptance
+
+0.6.41 live หลัง reload/lease ด้วย job `047d3c3e-64c5-447c-bdc1-ed25727550a2` ผ่าน native reset (`reset=true`, `native_scrollbar_drag`, `at_top=true`) และ step 8 คืน `reporting_bottom_reached` (`at_bottom=true`, `attempted_scrollbar=true`) แทน `visible_rows_unchanged`; job มี 8 snapshots, 198 raw Age observations, 35 unique parent Ad IDs และ `level_warnings=[]`. `report.prepare messages` ได้ `applied=true`, `missing_required=[]`, `missing_goal_metrics=["link_clicks","messaging_conversations"]`. Analysis สร้าง messaging result group และอันดับทุก Age scope (eligible 8/9/4/2/2/2) โดยไม่มี blocker ด้าน column/identity/timezone/filter; ตัวอย่าง best คือ MLBB ที่ ฿12.08 CPA ใน 18–24 และ MLBB/Free Fire/Rov/PUBG Mobile ที่ ฿7.21 ใน 55–64. Verified rows ต่อ Age คือ 34/35/32/26/26/27 และ footer 40 เป็นยอดรวมของรายงาน ไม่ได้ยืนยันตัวหารแยกต่อ Age; ห้ามอ้าง complete whole-account หรือรวมยอดข้าม Age. `payment_error` ยังเป็น diagnostic และไม่มี recommendation
+
+0.6.41 analysis coverage semantics (core/API/web, ไม่ต้อง reload Extension): `LevelAnalysis.reported_total_scope` ระบุว่า footer อ้างทั้งรายงาน (`report`) หรือตรง scope นี้ (`partition`); Breakdown partition จึงได้ `coverage=lower_bound` แทน `x/40` และ UI แสดง “ยืนยัน ID ได้ N แถว (ขั้นต่ำของกลุ่มนี้)” พร้อม recommendation `partition_total_unverified`. Web panel เพิ่มตัวเลือกยืนยัน timezone, attribution, ไม่มีตัวกรอง และไม่มี Breakdown แล้วส่งเป็น query ให้ `/captures/analysis` เฉพาะค่าที่ผู้ใช้ยืนยัน; live browser check ยืนยันว่าเมื่อเลือก Asia/Bangkok + no filters ระบบแสดง result group และอันดับได้ (ก่อนหน้านี้ web ถูกบล็อกแม้ `ads:agent` จัดอันดับได้). ห้ามนำผลรวมของ Age rows ไปแทนยอดรายงานหรือสร้างตัวหารเฉพาะกลุ่มด้วยการเดา; ต้อง restart API/web เพื่อใช้การเปลี่ยนแปลงนี้
 
 0.6.5 แก้ pane selection ของการเลื่อน, horizontal header/body pairing, vertical row_alignment, parent IDs จากคอลัมน์, visible-only report controls/busy markers และปิดทางยก DOM ที่ไม่ยืนยัน scope ไปเป็น normalized data; เพิ่มการยืนยันว่าไม่มี Breakdown/ตัวกรองโดยผู้ใช้ในฟอร์มตรวจข้อมูลเดิม (default ไม่เลือก) ดู ANALYSIS.md และ VALIDATION.md ก่อนอ้างความพร้อม ต้องยืนยัน runtime/snapshot0.6.5 และผลจริงใหม่ เพราะผล live0.6.4 ด้านล่างยังเป็น failed acceptance ไม่ใช่หลักฐานว่ารุ่นใหม่ผ่าน
 
@@ -157,10 +208,10 @@ Shared command รองรับ start/pause/resume/status, ui.action, ui.navig
 
 ## 5. วิธีรันบน Windows
 
-ทำใน CMD ที่ C:\BF โดยใช้ dependencies ฝั่ง Windows ห้ามใช้ node_modules ร่วม Windows/WSL โดยไม่ติดตั้งใหม่ด้วย npm ของแพลตฟอร์มที่จะรัน หากเรียกจาก WSL ของ workspace นี้ ใช้ `cmd.exe /d /c "npm ..."`
+ทำใน CMD ที่ `C:\BADS\bot-ads` โดยใช้ dependencies ฝั่ง Windows ห้ามใช้ node_modules ร่วม Windows/WSL โดยไม่ติดตั้งใหม่ด้วย npm ของแพลตฟอร์มที่จะรัน หากเรียกจาก WSL ของ workspace นี้ ใช้ `cmd.exe /d /c "npm ..."`
 
 ```bat
-cd /d C:\BF
+cd /d C:\BADS\bot-ads
 npm ci
 ```
 
@@ -176,7 +227,7 @@ npm run dev:api
 เปิด CMD อีกหน้าต่าง:
 
 ```bat
-cd /d C:\BF
+cd /d C:\BADS\bot-ads
 npm run dev:web
 ```
 

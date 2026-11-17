@@ -1,10 +1,58 @@
-import { recordKey, type AdRecord } from "./index";
+import {
+  recordKey,
+  type AdRecord,
+  type ImportReconciliation,
+} from "./index";
 export type AnalysisGoal = "messages" | "sales" | "leads";
+export type AnalysisSource = "csv" | "dom_capture" | "unknown";
+export type AnalysisScopeCoverage = "verified_for_import" | "unverified";
 export const goalLabels = {
   messages: "ข้อความ",
   sales: "ยอดขาย",
   leads: "ลูกค้าเป้าหมาย",
 } as const;
+/** CSV provenance is stamped by the importer and must win over user-supplied raw
+ * keys. DOM provenance is stamped by capture promotion. Unknown stays unknown
+ * rather than being guessed from names or row positions. */
+export function recordSource(record: AdRecord): AnalysisSource {
+  if (record.raw._source_filename) return "csv";
+  if (record.raw._source === "dom_capture") return "dom_capture";
+  return "unknown";
+}
+export type ImportScopeStatus =
+  | "verified_for_import"
+  | "unverified"
+  | "not_applicable";
+function importScopeStatus(record: AdRecord): ImportScopeStatus {
+  if (recordSource(record) !== "csv") return "not_applicable";
+  try {
+    const proof: unknown = JSON.parse(
+      record.raw._import_reconciliation ?? "",
+    );
+    if (!proof || typeof proof !== "object" || Array.isArray(proof))
+      return "unverified";
+    const stored = proof as {
+      version?: unknown;
+      filename?: unknown;
+      reconciliation?: {
+        status?: unknown;
+        verified?: unknown;
+        rows?: { matched?: unknown };
+        spend?: { matched?: unknown };
+      };
+    };
+    return stored.version === 1 &&
+      stored.filename === record.raw._source_filename &&
+      stored.reconciliation?.status === "verified_for_import" &&
+      stored.reconciliation.verified === true &&
+      stored.reconciliation.rows?.matched === true &&
+      stored.reconciliation.spend?.matched === true
+      ? "verified_for_import"
+      : "unverified";
+  } catch {
+    return "unverified";
+  }
+}
 export const requiredColumns = {
   messages: ["spend", "impressions", "link_clicks", "messaging_conversations"],
   sales: ["spend", "impressions", "link_clicks", "purchases", "purchase_value"],
@@ -82,8 +130,16 @@ const evaluationPolicy = Object.freeze({
 export function buildAnalysis(
   records: AdRecord[],
   goal: AnalysisGoal = "messages",
+  scope: {
+    coverage?: AnalysisScopeCoverage;
+    reconciliation?: ImportReconciliation | null;
+  } = {},
 ) {
+  const sourceMix = { csv: 0, dom_capture: 0, unknown: 0 };
   const rows = records.map((r) => {
+    const source = recordSource(r);
+    sourceMix[source]++;
+    const importReconciliation = importScopeStatus(r);
     const metrics = Object.fromEntries(
       [
         "spend",
@@ -153,6 +209,8 @@ export function buildAnalysis(
       objective: r.objective ?? null,
       breakdown: r.breakdown ?? {},
       status: r.status ?? null,
+      source,
+      import_reconciliation: importReconciliation,
       reported: metrics,
       derived: {
         link_ctr: ratio(metrics.link_clicks, metrics.impressions, 100),
@@ -183,9 +241,12 @@ export function buildAnalysis(
     };
   });
   const counts = new Map<string, number>();
-  for (const row of rows) counts.set(row.key, (counts.get(row.key) ?? 0) + 1);
+  for (const row of rows) {
+    const key = `${row.source}\u0000${row.key}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
   for (const row of rows)
-    if (counts.get(row.key)! > 1) {
+    if (counts.get(`${row.source}\u0000${row.key}`)! > 1) {
       row.missing.push("duplicate_grain");
       row.readiness = "incomplete";
     }
@@ -201,12 +262,18 @@ export function buildAnalysis(
       row.attribution,
       row.result_type,
       row.objective,
+      row.source,
       Object.entries(row.breakdown).sort(),
     ]);
     const list = groups.get(key) ?? [];
     list.push(row);
     groups.set(key, list);
   }
+  const sourceRank: Record<AnalysisSource, number> = {
+    csv: 0,
+    dom_capture: 1,
+    unknown: 2,
+  };
   const summaries = [...groups.entries()].map(([key, group]) => {
     const first = group[0];
     const blocked =
@@ -245,6 +312,7 @@ export function buildAnalysis(
       attribution: first.attribution,
       result_type: first.result_type,
       objective: first.objective,
+      source: first.source,
       breakdown: first.breakdown,
       rows: group.length,
       blocked,
@@ -267,6 +335,11 @@ export function buildAnalysis(
       },
     };
   });
+  summaries.sort(
+    (a, b) =>
+      sourceRank[a.source] - sourceRank[b.source] ||
+      a.date_start.localeCompare(b.date_start),
+  );
   // Overlapping intervals can coexist in the database. Expose them instead of summing across groups.
   const overlaps: string[] = [];
   const overlappingRows = new Set<string>();
@@ -280,6 +353,7 @@ export function buildAnalysis(
       row.timezone,
       row.attribution,
       row.result_type,
+      row.source,
       Object.entries(row.breakdown).sort(),
     ]);
     const list = intervals.get(k) ?? [];
@@ -423,6 +497,12 @@ export function buildAnalysis(
     goal,
     generated_at: new Date().toISOString(),
     coverage: "unverified" as const,
+    scope_coverage: scope.coverage ?? ("unverified" as const),
+    reconciliation: scope.reconciliation ?? null,
+    source_mix: sourceMix,
+    verified_import_rows: rows.filter(
+      (row) => row.import_reconciliation === "verified_for_import",
+    ).length,
     required_columns: requiredColumns[goal],
     evaluation_policy: evaluationPolicy,
     evaluation_groups: evaluationGroups,
@@ -434,6 +514,7 @@ export function buildAnalysis(
     },
     warnings: [
       "ความครบทั้งบัญชียังไม่ยืนยัน",
+      "CSV ที่กระทบยอดแล้วเป็นแหล่งยอดหลัก; DOM เป็นหลักฐานเสริมแบบ lower bound และระบบไม่บวกยอดข้ามแหล่งหรือข้ามชุดรายงาน",
       "สรุปแยกตามช่วงวันที่ ระดับ สกุลเงิน Attribution และ Breakdown; ห้ามบวกยอดข้ามกลุ่ม",
       "Reach และ Frequency ไม่รวมข้ามแถว",
       "ค่าคำนวณแยกจากค่าที่ Meta รายงาน; ตัวหารศูนย์หรือข้อมูลขาดให้ค่า null",

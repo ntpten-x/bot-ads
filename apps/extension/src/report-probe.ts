@@ -5,8 +5,11 @@ export type ReportProbeOptions = {
     | "menu"
     | "dialog"
     | "field"
+    | "checked"
     | "search"
     | "focused_search"
+    | "table_headers"
+    | "selected_columns"
     | "apply"
     | "closed";
   field?: ReportField;
@@ -23,10 +26,46 @@ export type ReportProbe = {
   signature?: string;
   busy?: boolean;
   locale?: "th" | "en" | "unknown";
+  headers?: string[];
+  checked_choices?: {
+    label: string;
+    context: string;
+    checked: boolean;
+    visible: boolean;
+    clipped: boolean;
+    x?: number;
+    y?: number;
+  }[];
+  selected_columns?: {
+    label: string;
+    visible: boolean;
+    clipped: boolean;
+    hit: boolean;
+    x?: number;
+    y?: number;
+  }[];
+  choice_scroll?: {
+    x: number;
+    y: number;
+    scroll_top: number;
+    client_height: number;
+    scroll_height: number;
+    range: number;
+  };
+  selected_scroll?: {
+    x: number;
+    y: number;
+    scroll_top: number;
+    client_height: number;
+    scroll_height: number;
+    range: number;
+  };
   diagnostics?: {
     visible_choice_count?: number;
     clipped_choice_count?: number;
     search_count?: number;
+    checked_labels?: string[];
+    hidden_checked_labels?: string[];
     matched_count: number;
     clipped_count: number;
     visible_busy_count: number;
@@ -96,6 +135,40 @@ export function probeReportTarget(options: ReportProbeOptions): ReportProbe {
         text(e),
     );
   const custom = /^(customize columns|กำหนดคอลัมน์เอง|ปรับแต่งคอลัมน์)(?:\.{3}|…)?$/i;
+  if (options.op === "table_headers") {
+    const seen = new Set<string>();
+    const rendered = (element: HTMLElement) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden"
+      );
+    };
+    const headers = [
+      ...document.querySelectorAll<HTMLElement>('[role="columnheader"],thead th'),
+    ].flatMap((header) => {
+      if (
+        header.closest('[role="dialog"],[aria-modal="true"]') ||
+        header.closest('[aria-hidden="true"]') ||
+        !rendered(header)
+      )
+        return [];
+      const value = text(header);
+      if (!value || /^(?:\.{3}|…|-)$/.test(value)) return [];
+      const key = value.toLowerCase();
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [value.slice(0, 160)];
+    });
+    return {
+      kind: headers.length ? "done" : "missing",
+      headers,
+      reason: headers.length ? undefined : "No rendered report headers",
+    };
+  }
   const dialogs = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')]
     .filter(visible)
     .filter(
@@ -113,6 +186,17 @@ export function probeReportTarget(options: ReportProbeOptions): ReportProbe {
         'button,[role="button"],[role="menuitem"]',
       ),
     ].filter(visible);
+  const choiceRow = (control: HTMLElement, boundary: Element | null) => {
+    const selector = 'input[type="checkbox"],[role="checkbox"]';
+    const direct = control.closest<HTMLElement>('li,[role="listitem"]');
+    if (direct && direct.querySelectorAll(selector).length === 1) return direct;
+    let row = control.parentElement;
+    for (let depth = 0; row && row !== boundary && depth < 8; depth++) {
+      if (row.querySelectorAll(selector).length === 1 && text(row)) return row;
+      row = row.parentElement;
+    }
+    return null;
+  };
   const target = (
     elements: HTMLElement[],
     kind: "click" | "fill",
@@ -130,7 +214,9 @@ export function probeReportTarget(options: ReportProbeOptions): ReportProbe {
     const { visible: inView, x, y } = geometry(e);
     if (!inView) return { kind: "wait", reason: "Report control clipped" };
     const hit = document.elementFromPoint(x, y);
-    const row = e.closest('li,[role="listitem"]');
+    const row = e.matches('input[type="checkbox"],[role="checkbox"]')
+      ? choiceRow(e, dialog ?? document.body)
+      : null;
     const rowHit =
       options.op === "field" &&
       !!hit &&
@@ -187,6 +273,230 @@ export function probeReportTarget(options: ReportProbeOptions): ReportProbe {
       "click",
     );
   const busyCount = () => [...dialog.querySelectorAll('[aria-busy="true"],[role="progressbar"]')].filter(visible).length;
+  if (options.op === "selected_columns") {
+    const removeLabel = /^(?:ลบ|remove|delete)$/i;
+    const removeButtons = [
+      ...dialog.querySelectorAll<HTMLElement>('button,[role="button"]'),
+    ].filter((e) => removeLabel.test(label(e)));
+    // The selected-columns panel is the sibling list headed by
+    // "เลือกไว้ N คอลัมน์" (or "Selected N columns"). Scope remove buttons to
+    // that panel so unrelated delete actions in the dialog are never touched.
+    const heading = [
+      ...dialog.querySelectorAll<HTMLElement>('div,span,h1,h2,h3,h4,p'),
+    ].find(
+      (e) =>
+        text(e).length < 200 &&
+        /^(?:เลือกไว้\s*\d+\s*คอลัมน์|selected\s+\d+\s+columns)/i.test(
+          text(e),
+        ),
+    );
+    let selectedRoot: HTMLElement = dialog;
+    if (heading) {
+      let root = heading.parentElement,
+        best = dialog,
+        bestCount = 0;
+      for (let depth = 0; root && root !== dialog && depth < 6; depth++) {
+        const count = [
+          ...root.querySelectorAll<HTMLElement>('button,[role="button"]'),
+        ].filter((e) => removeLabel.test(label(e))).length;
+        if (count > bestCount) {
+          bestCount = count;
+          best = root;
+        }
+        root = root.parentElement;
+      }
+      if (bestCount) selectedRoot = best;
+    }
+    const scoped = removeButtons.filter((e) => selectedRoot.contains(e));
+    const seen = new Set<string>();
+    const selected_columns: NonNullable<ReportProbe["selected_columns"]> = [];
+    for (const button of scoped) {
+      let name = "";
+      let row = button.parentElement;
+      for (let depth = 0; row && row !== selectedRoot && depth < 8; depth++) {
+        const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const parent = walker.currentNode.parentElement;
+          const value = norm(walker.currentNode.textContent ?? "");
+          if (!value || !parent || button.contains(parent)) continue;
+          if (parent.closest('[aria-hidden="true"]')) continue;
+          if (removeLabel.test(value)) continue;
+          if (
+            /^(?:ลาก|drag|move|ลากและวาง|เปิดดรอปดาวน์|เลือกไว้|selected\s+\d+)/i.test(
+              value,
+            )
+          )
+            continue;
+          name = value;
+          break;
+        }
+        if (name) break;
+        row = row.parentElement;
+      }
+      if (!name) continue;
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const g = geometry(button);
+      const hit = g.visible ? document.elementFromPoint(g.x, g.y) : null;
+      selected_columns.push({
+        label: name.slice(0, 160),
+        visible: g.visible,
+        clipped: g.clipped,
+        hit:
+          !!hit && (button === hit || button.contains(hit) || hit.contains(button)),
+        ...(g.visible ? { x: g.x, y: g.y } : {}),
+      });
+    }
+    const scrollContainers = new Map<HTMLElement, number>();
+    for (const e of scoped) {
+      let parent = e.parentElement;
+      while (parent) {
+        const style = getComputedStyle(parent);
+        if (
+          /^(?:auto|scroll)$/.test(style.overflowY) &&
+          parent.scrollHeight > parent.clientHeight + 2
+        ) {
+          scrollContainers.set(
+            parent,
+            (scrollContainers.get(parent) ?? 0) + 1,
+          );
+          break;
+        }
+        if (parent === dialog) break;
+        parent = parent.parentElement;
+      }
+    }
+    const scroll =
+      [...scrollContainers].sort((a, b) => b[1] - a[1])[0]?.[0] ?? selectedRoot;
+    const sg = scroll ? geometry(scroll) : undefined;
+    return {
+      kind: selected_columns.length ? "done" : "missing",
+      selected_columns,
+      ...(sg?.visible
+        ? {
+            selected_scroll: {
+              x: sg.x,
+              y: sg.y,
+              scroll_top: scroll.scrollTop,
+              client_height: scroll.clientHeight,
+              scroll_height: scroll.scrollHeight,
+              range: scroll.scrollHeight - scroll.clientHeight,
+            },
+          }
+        : {}),
+      reason: selected_columns.length
+        ? undefined
+        : "No selected-column remove controls",
+    };
+  }
+  if (options.op === "checked") {
+    const seen = new Set<string>();
+    const checked_choices: NonNullable<ReportProbe["checked_choices"]> = [];
+    const rowParts = (item: HTMLElement, control: HTMLElement) => {
+      const names =
+        control instanceof HTMLInputElement ? [...(control.labels ?? [])].map(text) : [];
+      if (
+        control.getAttribute("aria-label") ||
+        control.getAttribute("aria-labelledby")
+      )
+        names.push(label(control));
+      const helper: string[] = [];
+      const walker = document.createTreeWalker(item, NodeFilter.SHOW_TEXT);
+      let first = true;
+      while (walker.nextNode()) {
+        const parent = walker.currentNode.parentElement;
+        const value = norm(walker.currentNode.textContent ?? "");
+        // Naming a collapsed/hidden selected extra is still valid DOM evidence.
+        // Geometry is used later to decide whether search or scrolling is needed.
+        if (!value || !parent || parent.closest('[aria-hidden="true"]')) continue;
+        if (first) {
+          if (!names.length) names.push(value);
+          first = false;
+        } else helper.push(value);
+      }
+      return { names, helper };
+    };
+    for (const e of dialog.querySelectorAll<HTMLElement>('input[type="checkbox"],[role="checkbox"]')) {
+      if (e.closest('[role="columnheader"]')) continue;
+      const item = choiceRow(e, dialog);
+      if (!item) continue;
+      const { names, helper } = rowParts(item, e);
+      const name = norm(names[0] ?? "");
+      if (!name || /^(?:select all|เลือกทั้งหมด)$/i.test(name)) continue;
+      const context = [...names, ...helper].map(norm).join(" | ");
+      const key = `${name.toLowerCase()}\0${context.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const g = geometry(e);
+      checked_choices.push({
+        label: name,
+        context,
+        checked: e instanceof HTMLInputElement ? e.checked : e.getAttribute("aria-checked") === "true",
+        visible: g.visible,
+        clipped: g.clipped,
+        ...(g.visible ? { x: g.x, y: g.y } : {}),
+      });
+    }
+    const scrollContainers = new Map<HTMLElement, number>();
+    for (const e of dialog.querySelectorAll<HTMLElement>('input[type="checkbox"],[role="checkbox"]')) {
+      let parent = e.parentElement;
+      while (parent) {
+        const style = getComputedStyle(parent);
+        if (
+          /^(?:auto|scroll)$/.test(style.overflowY) &&
+          parent.scrollHeight > parent.clientHeight + 2
+        ) {
+          scrollContainers.set(
+            parent,
+            (scrollContainers.get(parent) ?? 0) + 1,
+          );
+          break;
+        }
+        if (parent === dialog) break;
+        parent = parent.parentElement;
+      }
+    }
+    const scroll =
+      [...scrollContainers].sort((a, b) => b[1] - a[1])[0]?.[0] ?? dialog;
+    const scrollGeometry = scroll ? geometry(scroll) : undefined;
+    const choice_scroll =
+      scroll && scrollGeometry?.visible
+        ? {
+            x: scrollGeometry.x,
+            y: scrollGeometry.y,
+            scroll_top: scroll.scrollTop,
+            client_height: scroll.clientHeight,
+            scroll_height: scroll.scrollHeight,
+            range: scroll.scrollHeight - scroll.clientHeight,
+          }
+        : undefined;
+    return {
+      kind: "done",
+      locale,
+      checked_choices,
+      ...(choice_scroll ? { choice_scroll } : {}),
+      diagnostics: {
+        matched_count: checked_choices.filter((choice) => choice.checked).length,
+        clipped_count: checked_choices.filter((choice) => choice.clipped).length,
+        visible_busy_count: busyCount(),
+        primary_match_count: checked_choices.filter((choice) => choice.visible).length,
+        helper_only_count: 0,
+        candidates: [],
+        search_count: 0,
+        checked_labels: checked_choices
+          .filter((choice) => choice.checked)
+          .slice(0, 40)
+          .map((choice) => choice.label.slice(0, 120)),
+        hidden_checked_labels: checked_choices
+          .filter((choice) => choice.checked && !choice.visible)
+          .slice(0, 40)
+          .map((choice) => choice.label.slice(0, 120)),
+        visible_choice_count: checked_choices.filter((choice) => choice.visible).length,
+        clipped_choice_count: checked_choices.filter((choice) => choice.clipped).length,
+      },
+    };
+  }
   if (options.op === "search" || options.op === "focused_search") {
     const searches = [
       ...dialog.querySelectorAll<HTMLInputElement>("input"),
@@ -279,7 +589,9 @@ export function probeReportTarget(options: ReportProbeOptions): ReportProbe {
       preferred_match,
     };
   });
-  let matching = states.filter((state) => state.primary_match);
+  let matching = states.filter(
+    (state) => state.primary_match && (!field.checked_only || state.checked),
+  );
   if (matching.some((state) => state.preferred_match))
     matching = matching.filter((state) => state.preferred_match);
   const checkboxes = matching.filter((state) => state.visible).map((state) => state.e);
@@ -303,6 +615,6 @@ export function probeReportTarget(options: ReportProbeOptions): ReportProbe {
   };
   const plan = target(checkboxes, "click");
   if (plan.kind === "click" && checkboxes.length === 1 && matching.find((state) => state.e === checkboxes[0])?.checked)
-    return { kind: "selected", label: field.key, locale, diagnostics };
+    return { ...plan, kind: "selected", label: field.key, locale, diagnostics };
   return { ...plan, locale, diagnostics };
 }

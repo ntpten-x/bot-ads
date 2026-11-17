@@ -1,12 +1,22 @@
-# ระบบข้อมูลวิเคราะห์โฆษณา 0.6.22
+# ระบบข้อมูลวิเคราะห์โฆษณา 0.6.41
 
 สถานะปัจจุบัน: ใช้กฎตรวจหลักฐานและประเมินต้นทุนที่อธิบายได้ ไม่ใช่บอทปรับงบหรือเผยแพร่อัตโนมัติ ดูการแก้ reliability และขั้นตอนรับรองรุ่นใหม่ท้ายเอกสาร หัวข้อรุ่นเก่าเก็บไว้เป็นประวัติ
+
+## CSV-first reconciliation — 2026-11-17
+
+CSV ที่ผ่าน validation เป็นแหล่งยอดหลัก ส่วน DOM เป็นหลักฐานเสริมแบบ visible lower bound ระบบไม่บวกยอดหรือจัดอันดับข้ามแหล่งข้อมูล และแยกชุดรายงานตาม `source` แม้แถวจะมี ID/วันที่/เงื่อนไขเดียวกัน
+
+`parseReport()` คืน `reconciliation` แบบ structured ประกอบด้วยจำนวนแถว, Spend และช่วงวันที่ (ถ้าระบุ) พร้อม expected/actual/delta/matched `coverage` ยังคงหมายถึงทั้งบัญชีและเป็น `unverified` เสมอ ส่วน `scope_coverage=verified_for_import` หมายถึงเฉพาะไฟล์ที่นำเข้าและจำนวนแถวกับ Spend ตรงกับค่าที่ผู้ใช้ระบุ ไม่ได้พิสูจน์ว่า Meta ไม่มีแถวอื่นนอกไฟล์
+
+หลังบันทึก CSV สำเร็จ Backend ประทับ `raw._import_reconciliation` จากผล validation ฝั่ง server (เขียนทับค่าที่อาจมีในคอลัมน์ CSV) Analysis อ่านหลักฐานนี้เป็นระดับแถวและรายงาน `verified_import_rows`; การไม่มีหลักฐานหรือ filename ไม่ตรงจะถือเป็น `unverified` ไม่เดาเป็นยอดที่ยืนยันแล้ว
+
+UI แสดง `กระทบยอดไฟล์นี้แล้ว` แยกจาก `ยังไม่ยืนยันทั้งบัญชี` และติดป้ายแหล่งข้อมูลในตารางวิเคราะห์ ประเมิน CPA/ROAS ภายในชุดรายงานเดียวกันเท่านั้น ห้ามใช้ยอด CSV แทน DOM ใน scope ที่ไม่ตรงกัน หรือรวมยอดสองแหล่งเข้าด้วยกัน
 
 ## เปิดใช้งาน
 
 หน้าเว็บ: http://127.0.0.1:9321/#analysis → เมนู **ข้อมูลวิเคราะห์**
 
-1. Reload Extension ใน `chrome://extensions` ให้เป็น 0.6.22 แล้วเปิดบัญชี Meta และกด **เชื่อมต่อและทดสอบอ่าน**
+1. Reload Extension ใน `chrome://extensions` ให้เป็น 0.6.41 แล้วเปิดบัญชี Meta และกด **เชื่อมต่อและทดสอบอ่าน**
 2. เลือกบัญชีและอุปกรณ์ในหน้าเว็บ เลือกเป้าหมาย **ข้อความ / ยอดขาย / ลูกค้าเป้าหมาย**
 3. เปิด popup กด **เปิดเมาส์/คีย์บอร์ดรายงาน 15 นาที** แล้วกด **ตั้งคอลัมน์วิเคราะห์ใน Meta** ในหน้าเว็บ รอประมาณ 30 วินาทีสำหรับการรับคำสั่ง ตรวจผลว่าคอลัมน์หลักใดยังหาไม่พบ หาก Meta ใช้หน้าต่างที่ไม่รองรับให้เปิด Columns → Customize columns ด้วยตัวเอง แล้วเลือกตามรายการในหน้าเว็บ
 4. กด **อ่านค่าตาราง Ads** เปิดแท็บ Meta ค้างไว้ ระบบเลื่อนแนวนอนเพื่อเก็บคอลัมน์และแนวตั้งเพื่อเก็บแถว ภาพข้อมูลแต่ละภาพมีเวลา รุ่นตัวอ่าน ชื่อคอลัมน์ และหลักฐานแถวของตัวเอง แถวระหว่างภาพอาจซ้ำกัน
@@ -139,7 +149,7 @@ Reason codes หลัก: `stable_id_unverified`, `parent_campaign_id_unverifie
 
 หน้าเว็บ "ข้อมูลจาก Extension" มีแผง **วิเคราะห์ประสิทธิภาพจากงานอ่านล่าสุด** และ API `GET /captures/analysis?account_id=ACCOUNT_ID[&job_id=JOB_UUID]` (ค่าเริ่มต้นคืองานอ่านล่าสุด) ใช้ `packages/core/src/capture-analysis.ts` ซึ่งเป็น pure function มี unit test
 
-- อ่าน capture ทั้งที่ `needs_review` และยกขึ้นแล้ว แต่ทุกผลมีป้ายกำกับ: ตัวตน (`verified_ids` / `no_stable_ids`), ยอดใช้จ่าย (`reported` / `estimated`), coverage เทียบจำนวนแถวที่ Meta พิมพ์ในแถวสรุป ("ผลลัพธ์จาก N …")
+- อ่าน capture ทั้งที่ `needs_review` และยกขึ้นแล้ว แต่ทุกผลมีป้ายกำกับ: ตัวตน (`verified_ids` / `no_stable_ids`), ยอดใช้จ่าย (`reported` / `estimated`), coverage เทียบจำนวนแถวที่ Meta พิมพ์ในแถวสรุป ("ผลลัพธ์จาก N …") เฉพาะเมื่อ footer อ้างขอบเขตเดียวกับ level นั้น
 - สถานะการแสดงโฆษณาแปลงเป็น `payment_error`, `off`, `parent_off`, `active`, `learning`, `limited`, `in_review`, `rejected`, `not_delivering`, `completed`, `unknown` ข้อความที่ไม่รู้จักเป็น `unknown`
 - ผลลัพธ์ ต้นทุนต่อผลลัพธ์ อิมเพรสชัน งบประมาณ (จำนวน/ต่อวัน/ตลอดอายุ/ใช้งบระดับบน) ค่า "—" หรือไม่มีคอลัมน์เป็น `null` ไม่เป็น 0
 - ยอดใช้จ่าย: ใช้คอลัมน์ "จำนวนเงินที่ใช้จ่ายไป" ถ้ามี มิฉะนั้นเป็น **ค่าประมาณ** ผลลัพธ์ × ต้นทุนต่อผลลัพธ์ (`spend_source=estimate_results_x_cost_per_result`) ไม่ถูกบันทึกเป็น spend จริง
@@ -153,9 +163,12 @@ Reason codes หลัก: `stable_id_unverified`, `parent_campaign_id_unverifie
 
 ข้อกำหนดส่วนนี้แทนพฤติกรรมวิเคราะห์ DOM ของ 0.6.1 ข้างต้น:
 
+Live `0.6.37` รอบแรกเพิ่มจากหนึ่งเป็นแปด snapshots และ coverage 26–35 แถวต่อ Age scope แต่ native path timeout ที่ step 8. รอบสอง probe ไม่เห็น custom scrollbar แม้ยังอยู่ที่ต้นตาราง; หลักฐานยืนยันว่า scrollbar ถูกเปิดเผยหลัง pointer hover. `0.6.38` จึง re-probe หลัง trusted hover ทุก target, drag thumb ที่เพิ่งปรากฏก่อนใช้ wheel และขยาย overall deadline เป็น 30 วินาทีโดยคง per-command debugger timeout 6 วินาที. Live `0.6.38` หลัง reload/lease ใหม่ยังได้หนึ่ง snapshot, `needs_review`, coverage ไม่ครบ และ `attempted_scrollbar=false`; DOM ชี้ว่า custom scrollbar อาจเป็น sibling ของ reporting scope. `0.6.39` จึงค้นหา track ใน reporting ancestors, เพิ่ม right-edge hover points ก่อน target budget เต็ม และไม่ส่ง wheel ซ้ำบน hover-only target. Live `0.6.39` พบ track/thumb จริงและ drag ถูกส่ง แต่ thumb อยู่ท้ายรางจนไม่มีแถวใหม่; `0.6.40` เพิ่ม native reset ลาก thumb ขึ้นบนสุดก่อน snapshot แรกและยืนยัน row signature เปลี่ยน. Live `0.6.40` ได้ 8 snapshots, 196 observations และ 35 unique parent Ad IDs แต่ทุก Age scope ยัง partial (coverage 26–35 จาก 40 แถว) และจบ `needs_review`; step 8 คืน `visible_rows_unchanged` ทั้งที่ custom thumb ห่างท้ายรางเพียง ~5px. `0.6.41` จึงเพิ่ม edge tolerance 8px, นับ custom scrollbar เป็นหลักฐาน `at_bottom`, และ rebase view หลัง attach เฉพาะเมื่อนิ่งติดกันสอง probe. Live `0.6.41` หลัง reload/lease ผ่าน native reset และ step 8 คืน `reporting_bottom_reached`; job `047d3c3e-64c5-447c-bdc1-ed25727550a2` มี 8 snapshots, 198 raw Age observations และ 35 unique parent Ad IDs. Analysis สร้าง messaging result group และอันดับทุก Age scope (eligible 8/9/4/2/2/2) โดยไม่มี blocker ด้าน column/identity/timezone/filter; verified rows คือ 34/35/32/26/26/27 และ footer 40 เป็นยอดรวมของรายงาน ไม่ใช่ตัวหารเฉพาะ Age จึงรายงานเป็น `coverage=lower_bound` ไม่ใช่ `x/40`. `payment_error` เป็น diagnostic เท่านั้น: เก็บไว้ใน delivery observations แต่ไม่สร้าง recommendation, ไม่จัดอันดับ และไม่บล็อกการประเมินผล เพราะเมื่อเติมเครดิตโฆษณาข้อความนี้จะหายไป.
+
 - แยก scope ตามบัญชี ระดับ ช่วงวันที่ สกุลเงิน เขตเวลา Attribution Breakdown และตัวกรอง รวมคอลัมน์ข้ามภาพด้วย stable ID ที่ยืนยันแล้วเท่านั้น; ไม่มี ID ให้เก็บเป็น unresolved evidence ไม่เป็นจำนวนแอด ยอดรวม หรืออันดับ
 - `unique_rows` / `verified_unique_rows` คือจำนวนตัวตนที่ยืนยันได้; `observed_rows` คือหลักฐานดิบที่อาจซ้ำ `unresolved_observations` คือหลักฐานที่ยังเชื่อมตัวตนไม่ได้ แยก `delivery_counts` ของตัวตนที่ยืนยันจาก `delivery_observation_counts` ของหลักฐานดิบ
-- `coverage=complete` รับรองเพียงจำนวน ID ตรง footer ภายใน scope ที่ตรวจแล้ว และไม่มีข้อขัดแย้ง ไม่รับรองทั้งบัญชี Meta ค่า `needs_review` ยังต้องตรวจเสมอ
+- `coverage=complete` รับรองเพียงจำนวน ID ตรง footer ภายใน scope ที่ตรวจแล้ว และไม่มีข้อขัดแย้ง ไม่รับรองทั้งบัญชี Meta; Breakdown partition ที่เห็นเฉพาะ footer รวมทั้งรายงานใช้ `coverage=lower_bound` และห้ามนำไปคิดเป็น `x/40` หรือบวกข้าม Age ค่า `needs_review` ยังต้องตรวจเสมอ
+- Web panel ส่งเฉพาะบริบทที่ผู้ใช้ยืนยันจริงไปยัง `/captures/analysis`: timezone, attribution, ไม่มีตัวกรอง และไม่มี Breakdown โดยเก็บค่าไว้ใน localStorage และไม่เดาค่าแทนผู้ใช้; live check ยืนยันว่าเมื่อยืนยัน Asia/Bangkok + no filters แล้ว result group และอันดับแสดงได้
 - ค่าใหม่กว่าของ ID/เงื่อนไขเดิมใช้แทนค่าเก่าพร้อม provenance; ค่าขัดกันในเวลาเดียวกันหรือ ID ซ้ำในภาพถูกระงับการสรุป ค่า unknown ใหม่ไม่ใช้ค่าเก่ากลบ ส่วนข้อมูลต่างช่วงวัน/หน่วยไม่รวมกัน
 - `spend_quality` และ `data_quality.spend` มี `reported`, `estimated`, `mixed`, `missing` อ้างอิงค่าที่อ่านได้จริง ไม่ใช่หัวคอลัมน์ `mixed` ครอบคลุมค่าขาดหายบางรายการด้วย ต้องดูแหล่งค่ารายแถว
 - ไม่มีหลักฐาน Breakdown/ตัวกรองให้เป็น `null` พร้อม blockers; `{}`/`[]` ใช้เมื่อมีหลักฐานชัดเจนว่าไม่มีการแจกแจง/ตัวกรองเท่านั้น ปัจจุบัน reader ระบุส่วนนี้ว่ายังไม่ยืนยัน จึงควรใช้ validated CSV สำหรับผลรวมและการประเมินเมื่อบริบทบนหน้าไม่ครบ

@@ -21,6 +21,140 @@ const record = () => {
   return r.records[0];
 };
 
+test("import reconciliation verifies only the file scope and exposes mismatches", () => {
+  const verified = parseReport(input);
+  assert.equal(verified.valid, true, verified.errors.join("\n"));
+  assert.equal(verified.coverage, "unverified");
+  assert.equal(verified.scope_coverage, "verified_for_import");
+  assert.equal(verified.reconciliation.status, "verified_for_import");
+  assert.equal(verified.reconciliation.verified, true);
+  assert.deepEqual(verified.reconciliation.rows, {
+    expected: 1,
+    actual: 1,
+    delta: 0,
+    matched: true,
+  });
+  assert.deepEqual(verified.reconciliation.spend, {
+    expected: 200,
+    actual: 200,
+    delta: 0,
+    matched: true,
+  });
+
+  const wrongRows = parseReport({
+    ...input,
+    expected: { rows: 2, spend: 200 },
+  });
+  assert.equal(wrongRows.valid, false);
+  assert.equal(wrongRows.scope_coverage, "unverified");
+  assert.equal(wrongRows.reconciliation.status, "mismatch");
+  assert.deepEqual(wrongRows.reconciliation.mismatches, ["rows"]);
+  assert.equal(wrongRows.reconciliation.rows.delta, -1);
+
+  const wrongSpend = parseReport({
+    ...input,
+    expected: { rows: 1, spend: 201 },
+  });
+  assert.equal(wrongSpend.valid, false);
+  assert.equal(wrongSpend.reconciliation.status, "mismatch");
+  assert.deepEqual(wrongSpend.reconciliation.mismatches, ["spend"]);
+  assert.ok(Math.abs(wrongSpend.reconciliation.spend.delta! + 1) < 0.005);
+
+  const wrongInterval = parseReport({
+    ...input,
+    expected: { rows: 1, spend: 200, date_start: "2026-11-02" },
+  });
+  assert.equal(wrongInterval.valid, false);
+  assert.deepEqual(wrongInterval.reconciliation.mismatches, ["interval"]);
+  assert.equal(wrongInterval.reconciliation.interval.matched, false);
+
+  const incomplete = parseReport({ ...input, expected: {} });
+  assert.equal(incomplete.valid, true);
+  assert.equal(incomplete.reconciliation.status, "incomplete");
+  assert.equal(incomplete.reconciliation.verified, false);
+  assert.deepEqual(incomplete.reconciliation.unchecked_inputs, [
+    "rows",
+    "spend",
+    "interval",
+  ]);
+  assert.ok(
+    incomplete.warnings.includes(
+      "Source reconciliation is incomplete: supply expected row count and spend.",
+    ),
+  );
+});
+
+test("analysis separates CSV and DOM scopes and never sums across sources", () => {
+  const csv = record();
+  const dom = {
+    ...csv,
+    breakdown: {},
+    raw: {
+      _source: "dom_capture",
+      _source_page: "/adsmanager/manage/ads",
+      _dom_scope_version: "1",
+      _dom_scope_filters: "[]",
+      _dom_scope_breakdown: "{}",
+      _dom_identity_source: "row_link_href",
+    },
+  };
+  const report = buildAnalysis([csv, dom]);
+  assert.deepEqual(report.source_mix, { csv: 1, dom_capture: 1, unknown: 0 });
+  assert.equal(report.groups.length, 2);
+  assert.deepEqual(
+    report.groups.map((group) => group.source),
+    ["csv", "dom_capture"],
+  );
+  assert.deepEqual(
+    report.groups.map((group) => group.totals.spend),
+    [200, 200],
+  );
+  assert.ok(report.rows.every((row) => !row.missing.includes("duplicate_grain")));
+  assert.ok(
+    report.warnings.some((warning) => warning.includes("ไม่บวกยอดข้ามแหล่ง")),
+  );
+
+  const validation = parseReport(input);
+  const scoped = buildAnalysis([csv], "messages", {
+    coverage: validation.scope_coverage,
+    reconciliation: validation.reconciliation,
+  });
+  assert.equal(scoped.coverage, "unverified");
+  assert.equal(scoped.scope_coverage, "verified_for_import");
+  assert.equal(scoped.reconciliation?.verified, true);
+
+  const stamped = {
+    ...csv,
+    raw: {
+      ...csv.raw,
+      _import_reconciliation: JSON.stringify({
+        version: 1,
+        filename: csv.raw._source_filename,
+        reconciliation: validation.reconciliation,
+      }),
+    },
+  };
+  const persisted = buildAnalysis([stamped]);
+  assert.equal(persisted.verified_import_rows, 1);
+  assert.equal(
+    persisted.rows[0].import_reconciliation,
+    "verified_for_import",
+  );
+  const tampered = buildAnalysis([
+    {
+      ...stamped,
+      raw: { ...stamped.raw, _source_filename: "different.csv" },
+    },
+  ]);
+  assert.equal(tampered.verified_import_rows, 0);
+  assert.equal(tampered.rows[0].import_reconciliation, "unverified");
+  assert.equal(dom.raw._source, "dom_capture");
+  assert.equal(
+    buildAnalysis([dom]).rows[0].import_reconciliation,
+    "not_applicable",
+  );
+});
+
 test("legacy DOM records lacking verified scope metadata cannot guide normalized evaluations or totals", () => {
   const legacy = ["331", "332", "333"].map((ad_id) => ({
     ...record(),
