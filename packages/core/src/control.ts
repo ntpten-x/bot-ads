@@ -118,6 +118,14 @@ export const botCommandSchema = z.union([
     .strict(),
   z
     .object({
+      command: z.literal("report.collect"),
+      goal: z.enum(["messages", "sales", "leads"]),
+      maxSteps: z.number().int().min(1).max(20).default(20),
+      scan_columns: z.boolean().default(false),
+    })
+    .strict(),
+  z
+    .object({
       command: z.literal("start"),
       levels: z
         .array(z.enum(["campaigns", "adsets", "ads"]))

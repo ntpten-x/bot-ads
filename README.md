@@ -2,7 +2,7 @@
 
 Chrome Extension สำหรับอ่านข้อมูลและควบคุม Meta Business Suite / Ads Manager ผ่านหน้าเว็บ + Backend รับคำสั่งบอทในเครื่อง + PostgreSQL
 
-**สถานะ:** Extension 0.6.0 รองรับการนำเข้า CSV และคำสั่งควบคุมหน้าเว็บ เคยทดสอบอ่านบัญชี Meta จริงบางส่วนแล้ว แต่ยังไม่ยืนยันการเก็บครบทั้งบัญชีหรือการสร้าง/เผยแพร่โฆษณาจริง
+**สถานะ:** source/build Extension 0.6.47 รองรับ one-click `report.collect` พร้อม fast refresh, job-level materialization, paged export, daily trend aggregation, CSV และรายงาน Ads แบบ manual-first ระบบยืนยัน coverage ได้เฉพาะ scope ที่มีหลักฐานครบ ไม่ได้แปลว่าครบทั้งบัญชีหรือมีการสร้าง/เผยแพร่โฆษณาจริง
 
 **สำหรับ AI ที่ทำงานต่อ:** เริ่มอ่าน [AGENTS.md](AGENTS.md) และ [คู่มือส่งต่องานและรูปแบบการพัฒนา](docs/AI_HANDOFF.md) ซึ่งรวมโครงสร้างระบบ วิธีรัน ข้อกำหนดข้อมูล วิธีทดสอบ และงานค้าง
 
@@ -30,7 +30,13 @@ Chrome Extension สำหรับอ่านข้อมูลและคว
 npm run dev:web
 ```
 
-เปิด **http://localhost:9321** และกรอก `API_TOKEN` จาก `.env` มีหน้าภาพรวม ควบคุม Meta นำเข้า CSV ดูข้อมูล/ส่งออก ประวัติคำสั่ง และตั้งค่า
+เปิด **http://localhost:9321** และกรอก `API_TOKEN` จาก `.env` มีหน้าภาพรวม บัญชีและสุขภาพ สตูดิโอรายงาน Ads ควบคุม Meta นำเข้า CSV ดูข้อมูล/ส่งออก ประวัติคำสั่ง และตั้งค่า
+
+สตูดิโอรายงานที่ `/#reports` แสดง KPI, กราฟเปรียบเทียบ, scatter, histogram, องค์ประกอบตามสถานะ, เส้นสะสม, แนวโน้มรายวัน ตาราง และการตรวจเทียบ CSV-vs-DOM ปุ่ม **ดึงข้อมูล Ads ใหม่** ใช้ workflow เดียวสำหรับเปิดหน้า ตั้งคอลัมน์ และเริ่มอ่าน พร้อมบันทึกเป้าหมาย CPA/ROAS ต่อบัญชีเพื่อแสดงเส้นอ้างอิง
+
+หน้า `/#optimization` เป็น Optimization Loop สำหรับสร้างข้อเสนอจาก Ads scope ที่ coverage complete, ตรวจ Evidence/Confidence/Risk, ตั้ง Policy, สร้างแผนอนุมัติ, บันทึก Experiment, Creative metadata, Campaign template, Rollback/Receipt และติดตามผลจาก Capture ล่าสุด. Action mutation ยังปิดอยู่จนกว่าจะมี certified Extension adapter และ local approval รายละเอียดที่ [OPTIMIZATION.md](docs/OPTIMIZATION.md)
+
+หน้า `/#accounts` ใช้จัดการ Customer/Account mapping, ตรวจ acceptance, เปิด/ปิด Customer หรือบัญชี, กำหนดการอ่าน Ads อัตโนมัติแบบ read-only, เพิกถอน client token และดู audit trail. API client ถูกจำกัดเฉพาะบัญชีของ Customer ตน; แม้เป็น `admin` ของ Customer ก็เห็นเฉพาะ Customer ของตน และ `viewer` เป็น read-only. Extension หนึ่ง Device ยังผูกทีละบัญชี จึงต้องใช้หลาย Device/Chrome Profile เมื่อต้องเก็บหลายบัญชีพร้อมกัน
 
 หากเพิ่งอัปเดตเวอร์ชัน ให้รัน `npm ci` และ `npm run build` ใน CMD ก่อน แล้วรีสตาร์ต Backend และ Reload Extension เพื่อใช้ dashboard endpoints และสถานะอนุมัติรุ่นใหม่
 
@@ -70,6 +76,7 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```bash
 docker compose up -d
 npm run db:migrate
+npm run db:backup
 npm run build
 npm run dev:api
 ```
@@ -108,7 +115,7 @@ API ฟังเฉพาะ `127.0.0.1:4318` ในเครื่อง ไม
 
 ## การจัดเก็บ
 
-ตาราง entity แยกตาม Campaign → Ad Set → Ad → Creative โดย key ประกอบ account ID เสมอ แต่ API token ในเวอร์ชันนี้เป็นสิทธิ์ระดับเครื่อง ไม่มี tenant isolation
+ตาราง entity แยกตาม Campaign → Ad Set → Ad → Creative โดย key ประกอบ account ID เสมอ. Local `API_TOKEN` เป็น bootstrap admin; client token ถูกจำกัดด้วย customer ownership และ role ที่ Backend ทุก request. Token เก็บเฉพาะ SHA-256 hash และเพิกถอนได้ทันที
 
 `insight_observations` เก็บทั้ง daily และ period aggregates; view `insights_daily` เลือกเฉพาะวันเดียวและไม่มี breakdown เท่านั้น ช่วงรายงานที่ทับซ้อนกันยังเป็นคนละ observation ผู้ใช้ข้อมูลต้องเลือก grain ให้ตรงก่อนรวมยอด
 
@@ -122,6 +129,9 @@ DOM snapshots ทุกชุดที่ Extension ส่งมาถูกบ�
 npm run check
 npm run test:api
 npm run test:captures
+npm run check:live-report
+npm run test:accounts-web
+npm run test:optimization-web
 npm run test:reader
 npx playwright install chromium
 npm run test:browser
@@ -129,6 +139,14 @@ npm run test:ui
 ```
 
 Integration tests ต้องเปิด PostgreSQL, migrate และ API ก่อน โดยอ่าน `.env` ชุดเดียวกัน ทั้งสองชุดเพิ่มข้อมูลจำลองในฐานข้อมูล ควรใช้ฐานทดสอบแยกเมื่อนำไปใช้จริง
+
+`npm run db:backup` สร้างไฟล์ PostgreSQL custom dump ใน `backups/` ซึ่งถูก ignore จาก Git. การ restore ต้องระบุไฟล์และยืนยันชัดเจน:
+
+```bash
+DB_RESTORE_CONFIRM=restore-local-database npm run db:restore -- backups/FILE.dump
+```
+
+Restore เป็น destructive operation และควรทดสอบบนฐานสำรองก่อนใช้กับข้อมูลจริง
 
 Browser test ใช้ Chrome Extension จริงกับหน้า Ads Manager จำลอง ไม่ติดต่อ Meta และ pregrant host permission ในสำเนา extension สำหรับทดสอบเท่านั้น ภาพ UI จากการทดสอบเก็บไว้ใน `docs/screenshots/` เฉพาะเครื่องที่รันทดสอบ และไม่รวมใน Git
 

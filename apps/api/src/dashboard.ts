@@ -3,13 +3,28 @@ import { z } from "zod";
 import type { Pool } from "pg";
 export function dashboardRoutes(pool: Pool) {
   const router = Router();
-  router.get("/dashboard", async (_req, res) => {
+  router.get("/dashboard", async (req, res) => {
+    const customerId =
+      ((req as any).auth?.customer_id as string | null | undefined) ?? null;
     const [accounts, devices] = await Promise.all([
       pool.query(
-        "SELECT id FROM ad_accounts UNION SELECT state->>'bound_account' AS id FROM bot_devices WHERE state->>'bound_account' IS NOT NULL ORDER BY id LIMIT 200",
+        customerId
+          ? "SELECT account_id AS id FROM managed_accounts WHERE customer_id=$1 ORDER BY account_id LIMIT 200"
+          : "SELECT id FROM ad_accounts UNION SELECT account_id AS id FROM managed_accounts UNION SELECT state->>'bound_account' AS id FROM bot_devices WHERE state->>'bound_account' IS NOT NULL ORDER BY id LIMIT 200",
+        customerId ? [customerId] : [],
       ),
       pool.query(
-        "SELECT id,updated_at,state->>'bound_account' AS account_id,state->>'enabled' AS enabled,state->'job'->>'status' AS job_status FROM bot_devices ORDER BY updated_at DESC LIMIT 100",
+        customerId
+          ? `SELECT id,updated_at,state->>'bound_account' AS account_id,
+                    state->>'enabled' AS enabled,
+                    state->'job'->>'status' AS job_status
+             FROM bot_devices
+             WHERE state->>'bound_account' IN (
+               SELECT account_id FROM managed_accounts WHERE customer_id=$1
+             )
+             ORDER BY updated_at DESC LIMIT 100`
+          : "SELECT id,updated_at,state->>'bound_account' AS account_id,state->>'enabled' AS enabled,state->'job'->>'status' AS job_status FROM bot_devices ORDER BY updated_at DESC LIMIT 100",
+        customerId ? [customerId] : [],
       ),
     ]);
     res.json({

@@ -12,6 +12,14 @@ try {
     "001_initial",
     "002_bot_control",
     "003_dom_captures",
+    "004_report_performance",
+    "005_report_preferences",
+    "006_capture_report_cache",
+    "007_managed_accounts",
+    "008_customer_access",
+    "009_operations_hardening",
+    "010_optimization_loop",
+    "011_experiment_observations",
   ]) {
     const { rowCount } = await client.query(
       "SELECT 1 FROM schema_migrations WHERE name=$1",

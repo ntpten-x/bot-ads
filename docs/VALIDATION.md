@@ -1356,3 +1356,298 @@ the Breakdown menu. Its reader fixture covers age subrows, stable parent ID,
 metric cells, status and result type. `npm run check` (67 tests), reader,
 Breakdown, browser, report-probe and report-columns fixtures pass. Live0.6.22
 acceptance remains pending reload; no ranking from age scopes is claimed yet.
+
+## Manual Report Studio and live 40-Ad read — 18 Nov 2026
+
+Added a separate `/#reports` view that renders Ads capture data as manual
+comparison bars and a filterable table without recommendations, performance
+grades or automatic ranking. The view preserves the reporting scope, source,
+spend basis, row identity state, coverage and reader provenance in both the UI
+and CSV/JSON exports.
+
+The connected Extension 0.6.41 had a fresh heartbeat and report-input lease.
+The read-only `ads:agent` run set the required report columns, navigated to the
+Ads route and completed with `needs_review`. Job
+`2c64bc8a-e045-4a86-948f-0d33a17c251b` persisted two snapshots and 58 raw row
+observations. After merging snapshots by stable Ad ID, the analyzer reported 40
+unique verified Ads, Spend from the Meta column, Results/Impressions present,
+no missing required columns and no unresolved observations. The visible report
+footer was 40 rows, so coverage for this scope was `complete`.
+
+The live run used the existing report-column setup and retained Meta's payment
+error delivery text as a diagnostic. No ad, budget, delivery status or view
+publication action was performed by the report feature. This result verifies
+one Ads scope only; it does not prove whole-account coverage or the correctness
+of future Meta layouts.
+
+Observed checks:
+
+- root unit suite: 81/81 pass, including weighted Cost/result aggregation,
+  scope/source separation, histogram, scatter, concentration, donut composition
+  and daily-trend grouping
+- `npm run typecheck:web` passed
+- `npm run test:report-studio` passed with a real Next UI fixture covering
+  six chart views, metric switching, search filtering, daily trend rendering
+  and mobile overflow
+- live capture API returned 40/40 verified IDs for the selected scope, with
+  currency THB, timezone/attribution context and empty filters/breakdown
+
+## Report materialization and 0.6.42 workflow — 18 Nov 2026
+
+Implemented and verified the data-path corrections identified by the system
+review:
+
+- Ads captures now read parent Campaign/Ad Set names from visible, mapped
+  columns and upsert verified parent entities during promotion.
+- `POST /captures/jobs/JOB_UUID/review` re-evaluates all snapshots with one
+  operator context and reports raw promoted rows plus unique observation grains.
+- `report.collect` performs server-validated navigate → column setup → Ads
+  collection within one Extension command, reducing command-queue idle time.
+- Report Studio defaults to verified rows, polls only while a command/job is
+  active, exposes result type in the materialization context, and shows workflow
+  progress.
+- `/export` supports level/date/source/limit/offset and page metadata.
+  `/insights/trend` aggregates daily observations in PostgreSQL.
+- Added `004_report_performance` indexes only; no existing migration was edited.
+
+Live materialization of job `2c64bc8a-e045-4a86-948f-0d33a17c251b` after
+operator confirmation produced 50 promoted raw rows and 35 unique normalized
+observations. The remaining 8 raw rows stayed `needs_review` because Meta did
+not expose Impressions; no zero was invented. `/export` reported 35 normalized
+records. This job is a period aggregate, so `/insights/trend` correctly returned
+no daily series.
+
+Observed checks:
+
+- root typecheck and web typecheck passed
+- unit suite: 86/86
+- `npm run test:captures`: Ads-only materialization, paged export, daily trend
+  aggregate and scoped analysis passed
+- `npm run test:report-studio`: six chart views, `report.collect` payload,
+  context panel, trend and mobile layout passed
+- `npm run test:api`, `npm run test:report-input`, `npm run test:connect`,
+  `npm run build`, and `npm run build:web` passed
+
+Live 0.6.42 reproduction: `report.collect` reached the Extension but failed with
+`Bound reporting tab must remain active with the same account` before column
+setup. Source trace showed the branch activated the tab only when navigation was
+needed, while `prepareReportWithInput` requires `tab.active`. 0.6.43 now
+activates, focuses and maximizes the bound tab on every one-step collection.
+Live 0.6.43 rerun reached the same guard after setup had begun, showing that
+activation must be maintained at each trusted-input guard. 0.6.44 re-activates
+only the already-bound tab immediately before input, then separates URL/account
+mismatch from a tab that remains inactive. Fresh 0.6.44 live acceptance remains
+required; 0.6.42 and 0.6.43 are not recorded as passing.
+
+Live 0.6.44 reruns reached Ads collection successfully after the input-lifetime
+fix, but native custom-scrollbar reset failed with
+`reporting_view_changed_before_input` because reset stability compared the whole
+table signature while Meta metrics were refreshing. Both runs covered only
+31–32 of 40 rows and correctly reported `partial`. 0.6.45 narrows reset
+stability to the custom scrollbar geometry while still proving row identity
+changed after drag.
+
+Live 0.6.45 acceptance passed for job
+`67c9bf13-99ba-47b6-95a5-a7ce8e54c4ba`: one `report.collect` workflow prepared
+columns, started collection and persisted three snapshots. Analysis reported
+40/40 verified Ads, 87 raw observations, zero unresolved observations, Spend
+from the Meta column and `coverage=complete` for this Ads scope.
+Job-level materialization promoted 74 raw rows into 35 unique normalized
+observations; the remaining rows stayed `needs_review` because Meta omitted
+Impressions. This is not a whole-account completeness claim.
+
+Additional validation for the final report integrity pass:
+
+- `packages/core/src/reconciliation.ts` unit tests cover exact-context matching,
+  ID differences and metric deltas without combining sources.
+- `test:captures` imports a compatible CSV fixture and confirms 1 matched Ad,
+  zero Spend delta, and a `matched` reconciliation for the same scope.
+- `test:report-studio` verifies reconciliation display, target CPA reference
+  rendering, preferences, workflow state and mobile layout.
+- `005_report_preferences` stores target Cost/result and ROAS per account. The
+  target is user-supplied and only rendered as an axis reference.
+
+0.6.46 fast-refresh and scale validation:
+
+- trusted report-input fixture proves `reuseIfReady` returns `reused=true`
+  without additional trusted input when rendered headers are already valid
+- Report Studio fixture verifies persistent normalized coverage `35/40 Ads`,
+  74/87 promoted raw rows and missing-impressions reason
+- model scale tests cover 500 Ads across chart/histogram/scatter/concentration
+  transforms and a bounded 365-point daily trend series
+- live 0.6.46 fast-refresh acceptance remains required after extension reload
+
+Live 0.6.46 fast-refresh reached a 2.68-second `report.collect` command but
+coverage regressed to 31/40. The first snapshot used an unexpected narrow layout
+with no IDs, while later snapshots had IDs. Source trace showed the collector
+alarm could fire before read zoom/reflow completed. 0.6.47 clears the previous
+collect alarm, applies zoom, calls `advance()` once, and only then creates the
+next alarm. Fresh 0.6.47 live coverage acceptance remains required.
+
+Live 0.6.47 fast-refresh acceptance passed for job
+`148d1780-4877-49eb-a52d-0ed657a807b5`: 40/40 Ads, two snapshots, 58 raw rows,
+40 verified IDs, zero unresolved and `coverage=complete`. The `report.collect`
+command completed in 7.92 seconds, down from 122.05 seconds in the full-prepare
+path. Job materialization produced 50 promoted raw rows and 35 unique normalized
+observations; missing Impressions remains the only promotion reason. This
+validates the current 40-Ad scope, not a whole-account or larger-account claim.
+
+Database-first report cache validation:
+
+- migration `006_capture_report_cache` stores analysis per `job_id + context_key`
+- `POST /captures/jobs/:job/review` writes the report cache after promotion
+- repeated `GET /captures/analysis` with the same verified context returned
+  `report_cached=true`
+- live 40-Ad report measured approximately 31 ms on first analysis and 3.68 ms
+  on cache hit
+- new capture snapshots invalidate cached reports before new analysis is used
+- CSV reconciliation remains available but optional for the database-first
+  Report Studio readiness checklist
+
+Final live smoke on 18 Nov 2026 (`npm run check:live-report`) passed:
+
+- Extension 0.6.47, current job `148d1780-4877-49eb-a52d-0ed657a807b5`
+- 40/40 verified Ads, 40 reported, zero unresolved observations
+- coverage complete, no page errors and no mobile overflow
+- five chart views rendered from the real Next UI
+- report cache hit returned `report_cached=true`
+- normalization remains 35 Ads / 35 observations with only
+  `missing_required_metric:impressions`
+- no CSV reconciliation file matches the current scope; this is informational
+  and does not block the database-first report path
+
+## Multi-account and customer isolation — 18 Nov 2026
+
+Added and tested:
+
+- `007_managed_accounts`: customer ownership, account display name, enabled
+  state and per-account report template
+- `008_customer_access`: hashed client tokens and `admin` / `operator` /
+  `viewer` roles
+- `GET /auth/me` and `GET /managed-accounts` health/acceptance summaries
+- frontend `/#accounts` page with account health, device state, coverage,
+  normalized Ads, target readiness, enable/disable and one-time client tokens
+- API middleware rejects account/device/job access outside the client’s
+  customer and blocks all viewer POST operations
+- new commands/imports/report requests for disabled accounts return `403`
+
+Integration fixture created a customer, mapped an account, issued an operator
+and viewer token, and verified:
+
+- operator only sees the mapped account
+- operator can export that account
+- another account returns `403`
+- viewer write returns `403`
+
+This proves tenant ownership enforcement in the tested routes. A live test with
+multiple real customers/Chrome profiles is still required before production
+multi-customer rollout.
+
+`npm run test:accounts-web` also passed with a real Next UI fixture covering
+account health, partial acceptance, Device state, target readiness,
+enable/disable action, customer-management controls and mobile layout.
+
+Current live health queries show the established account as `ready` for its
+40-Ad complete scope while the newly switched account remains `blocked/partial`
+until its coverage and timezone are resolved. This is the intended per-account
+acceptance behavior; health is never inherited across accounts.
+
+## Operations hardening and switched-account acceptance — 18 Nov 2026
+
+Implemented migration `009_operations_hardening` with an admin audit log and
+opt-in per-account read-only collection schedules. The scheduler only queues
+`report.collect` for an enabled account/customer when the bound Device is fresh,
+has `report_input=true`, and has no pending or paused/running collection. Errors
+receive at most three bounded retries. Disabling an account or Customer also
+disables its schedule.
+
+Corrected health and isolation gaps found during the final review:
+
+- account health now counts normalized Ads from the latest capture job instead
+  of all historical observations;
+- an account with a stale Device heartbeat is not reported as fully ready;
+- Customer-scoped `admin` tokens see and manage only their own Customer;
+- disabled accounts are rejected at state ingestion, analysis preview, import
+  validation, command polling and job/snapshot review as well as report reads;
+- client tokens can be revoked, Customers can be disabled, and both actions are
+  written to `admin_audit_log`;
+- managed Account Center hides discovered database-only accounts that have no
+  Device, capture, observation, display name or report template.
+
+The source and Windows runtime were restarted after the migration. Final
+automated checks:
+
+- `npm run typecheck` and `npm run typecheck:web` passed
+- `npm test`: 86/86 passed
+- `npm run test:api` passed
+- `npm run test:captures` passed, including due-schedule queueing,
+  `report.collect` payload validation, token revocation, customer-scoped admin
+  isolation, audit creation and disabled-account blocking
+- `npm run test:web` passed
+- `npm run test:report-studio` and `npm run test:accounts-web` passed,
+  including six report views, account schedules, token controls, audit display
+  and mobile layout
+- web-fixture cleanup now removes its temporary managed account as well as
+  Device/import data; confirmed stale `Sample campaign` fixture accounts from
+  older runs were removed after the PostgreSQL backup. Account Center now shows
+  only the two live scopes used in this acceptance run
+
+Live Database-first smoke on the established account passed:
+
+- Extension `0.6.47`, job `148d1780-4877-49eb-a52d-0ed657a807b5`
+- 40/40 verified Ads, `coverage=complete`, zero unresolved observations
+- warm cached report returned in 18 ms in the observed run
+- 35/35 normalized observations remain because Meta omitted Impressions on
+  five Ads; unknown values were not converted to zero
+- no browser errors and no mobile overflow
+
+The newly switched account `277466439080476` was exercised through the real
+Report Studio UI with explicit `Asia/Bangkok` and the 7-day attribution scope:
+
+- Meta reported 34 Ads; analysis kept two attribution scopes separate
+  (`29` seven-day rows and `5` one-day rows) instead of summing them
+- UI smoke rendered relationship, histogram, composition, concentration and
+  trend views with no page errors or mobile overflow
+- after explicit no-filter/no-Breakdown confirmation, job-level materialization
+  promoted 26 raw rows into 15 unique observations; remaining rows stayed
+  `needs_review` for missing Spend, Impressions or result type
+- both scopes remain `partial` at 29/34 and 5/34. The switched account is
+  therefore operationally supported, but its selected Meta report is not yet
+  complete enough for a close-the-books or whole-account claim
+
+## Optimization Loop — 18 Nov 2026
+
+Added migration `010_optimization_loop` and `/#optimization`:
+
+- deterministic recommendations from complete Ads report scopes only
+- policy thresholds for minimum results/spend/peers, scale/pause ratios and
+  maximum budget change
+- recommendation evidence, confidence, risk and expected-impact records
+- optimization plans/steps, plan approval, action receipts and rollback plans
+- experiment register with hypothesis and arms
+- Creative metadata and Campaign templates
+- outcome observations comparing the target Ads with a later capture
+- entity version sync for known Campaign/Ad Set/Ad hierarchy
+
+The mutation boundary remains closed: `automated_meta_mutation=false`. A plan can
+be approved in the workspace, but the UI explicitly states that a certified
+Extension adapter plus local popup approval is still required before a Meta
+mutation. No campaign is created, paused, budget-adjusted or published by these
+new APIs.
+
+Validation passed:
+
+- root unit suite: 89/89
+- optimization unit tests cover median comparison, sufficient/insufficient
+  peers, partial coverage and estimated-spend rejection
+- `test:captures` created a three-Ad complete scope, rebuilt
+  winner/middle/expensive recommendations, created and approved a plan, observed
+  the target Ads, created an experiment, stored Creative metadata and a Campaign
+  template
+- migration `011_experiment_observations` adds linked entity IDs and metric
+  observations per experiment arm; fixture validation recorded one arm
+  observation and exposed its count in the workspace
+- `test:optimization-web` passed the evidence ledger, rebuild, plan approval
+  boundary, experiment start and mobile layout
+- live account `224564085079365` produced 12 evidence-based recommendations
+  from 12 eligible peers in the complete 40-Ad report scope

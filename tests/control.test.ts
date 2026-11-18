@@ -21,10 +21,23 @@ test("accept typed UI commands and refuse JS, selectors and remote approvals", (
     }).success,
     true,
   );
+  assert.deepEqual(
+    botCommandSchema.parse({
+      command: "report.collect",
+      goal: "messages",
+    }),
+    {
+      command: "report.collect",
+      goal: "messages",
+      maxSteps: 20,
+      scan_columns: false,
+    },
+  );
   for (const command of [
     { command: "eval", code: "alert(1)" },
     { command: "reportInputSession", action: "enable" },
     { command: "report.prepare", goal: "messages", method: "Runtime.evaluate" },
+    { command: "report.collect", goal: "messages", maxSteps: 21 },
     { command: "uiSession", action: "approve" },
     { command: "ui.action", action: { type: "click", selector: "button" } },
     { command: "ui.action", action: { type: "inspect" }, tabId: 999 },

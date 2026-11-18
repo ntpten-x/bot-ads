@@ -42,6 +42,7 @@ export function actionName(command: BotCommand) {
   const map: Record<string, string> = {
     start: "เริ่มรวบรวมตาราง",
     "report.prepare": "ตั้งคอลัมน์วิเคราะห์",
+    "report.collect": "ดึงข้อมูล Ads และตั้งคอลัมน์",
     pause: "พักงานอ่านตาราง",
     resume: "อ่านตารางต่อ",
     status: "อ่านสถานะงาน",

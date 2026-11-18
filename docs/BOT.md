@@ -102,11 +102,19 @@ Business Suite ที่ไม่มี `act` ใน URL อ่านได้ �
 
 `POST /imports/validate`, `POST /imports`, `GET /imports?account_id=...`, `GET /export?account_id=...` ยังใช้ตาม README สำหรับ CSV → validation → PostgreSQL ข้อมูล DOM ดิบอยู่ใน Chrome Storage, device state และตาราง `capture_snapshots`/`capture_rows` ถูกยกเป็น insights เฉพาะแถวที่ยืนยันเงื่อนไขครบ ไม่เดาเงื่อนไขรายงาน
 
+`GET /captures/jobs/JOB_UUID/reconciliation?account_id=...&scope_key=...` ตรวจเทียบ stable Ad IDs และยอด Spend/Impressions/Results ระหว่าง capture scope กับ CSV imports ที่เงื่อนไขตรงกัน โดยไม่รวมยอดสองแหล่ง
+
+`GET/POST /reports/preferences` เก็บ goal, target Cost/result และ target ROAS ต่อ account สำหรับแสดงเส้นอ้างอิงใน Report Studio
+
+`GET /managed-accounts` แสดง health/acceptance ของบัญชีที่ token มีสิทธิ์เห็น. `GET /auth/me` ระบุ kind/role/customer. Local `API_TOKEN` เป็น admin; client token ที่สร้างจาก `/customers/:customer/clients` ถูก scope ตาม customer และ role.
+
 ## คำสั่งข้อมูลวิเคราะห์ 0.4.0
 
 `{"command":"report.prepare","goal":"messages"}` ตั้งเฉพาะคอลัมน์รายงานใน dialog ที่ตรวจชื่อได้; goal เลือก `messages`, `sales`, `leads` ขณะไม่มีงานอ่านตารางรันอยู่ ผล `ui.report` ระบุ selected, missing, missing_required, applied
 
 `{"command":"start","levels":["ads"],"maxSteps":5,"scan_columns":true}` อ่านแถวและเลื่อนคอลัมน์ที่เปิดอยู่แบบจำกัด ผลเป็น raw observations ไม่ใช่ normalized Insights
+
+`{"command":"report.collect","goal":"messages","maxSteps":20,"scan_columns":false}` เป็น typed workflow สำหรับหน้า Report Studio: ตรวจ bridge/permission, navigate ไป Ads route เมื่อจำเป็น, ตั้งคอลัมน์, ตรวจผล แล้วเริ่ม start ภายใน command เดียว ช่วยลด idle time จาก command queue โดยไม่เพิ่ม JS/selector/CDP payload และยังต้องใช้ local report-input lease
 
 CLI: `npm run bot -- DEVICE_UUID prepare sales` และ `npm run bot -- DEVICE_UUID collect ads`
 

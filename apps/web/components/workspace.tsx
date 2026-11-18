@@ -35,12 +35,36 @@ const DataView = dynamic(() => import("./data-view"), {
     </Panel>
   ),
 });
+const ReportStudioView = dynamic(() => import("./report-studio-view"), {
+  loading: () => (
+    <Panel title="สตูดิโอรายงาน">
+      <p className="panel-form muted">กำลังเปิดรายงาน Ads…</p>
+    </Panel>
+  ),
+});
+const AccountsView = dynamic(() => import("./accounts-view"), {
+  loading: () => (
+    <Panel title="บัญชีและความพร้อม">
+      <p className="panel-form muted">กำลังโหลดบัญชี…</p>
+    </Panel>
+  ),
+});
+const OptimizationView = dynamic(() => import("./optimization-view"), {
+  loading: () => (
+    <Panel title="Optimization loop">
+      <p className="panel-form muted">กำลังโหลดข้อเสนอและแผน…</p>
+    </Panel>
+  ),
+});
 const AnalysisView = dynamic(() => import("./analysis-view"));
 const HistoryView = dynamic(() => import("./history-view"));
 const CapturesView = dynamic(() => import("./captures-view"));
 type View =
   | "analysis"
   | "overview"
+  | "reports"
+  | "optimization"
+  | "accounts"
   | "control"
   | "import"
   | "data"
@@ -60,6 +84,30 @@ const navigation: {
     icon: "home",
     title: "ภาพรวมการทำงาน",
     description: "เชื่อมต่อ Extension และเริ่มรวบรวมข้อมูลโฆษณา",
+  },
+  {
+    id: "reports",
+    label: "สตูดิโอรายงาน",
+    icon: "chart",
+    title: "รายงานโฆษณาแบบมองเห็น",
+    description:
+      "ดูกราฟแท่ง ตาราง และบริบทของข้อมูล Ads เพื่อวิเคราะห์ด้วยตนเอง",
+  },
+  {
+    id: "optimization",
+    label: "Optimization Loop",
+    icon: "target",
+    title: "Optimization และการทดลอง",
+    description:
+      "เปลี่ยนหลักฐานจาก Ads เป็นข้อเสนอ แผนอนุมัติ การทดลอง และผลลัพธ์ที่วัดได้",
+  },
+  {
+    id: "accounts",
+    label: "บัญชีและสุขภาพ",
+    icon: "check",
+    title: "บัญชีโฆษณาและความพร้อม",
+    description:
+      "ตรวจ Device, coverage, normalized Ads และ acceptance ของแต่ละบัญชี",
   },
   {
     id: "control",
@@ -651,6 +699,13 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
                   <Panel title="ทำงานต่อจากตรงนี้">
                     {[
                       {
+                        view: "reports" as View,
+                        icon: "chart",
+                        title: "เปิดสตูดิโอรายงาน",
+                        description:
+                          "ดู Spend, Results, Impressions และสถานะ Ads ในกราฟและตาราง",
+                      },
+                      {
                         view: "control" as View,
                         icon: "pointer",
                         title: "อ่านหรือควบคุมหน้า Meta",
@@ -727,6 +782,51 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
                 run={run}
                 busy={!!busy}
                 fresh={fresh}
+              />
+            ) : null}
+            {view === "reports" ? (
+              <ReportStudioView
+                key={account}
+                account={account}
+                api={api}
+                run={run}
+                busy={!!busy}
+                deviceState={ds ?? undefined}
+                device={device}
+                send={send}
+                fresh={fresh}
+                onOpenCaptureSetup={() => changeView("analysis")}
+                onOpenOptimization={() => changeView("optimization")}
+                onImport={() => changeView("import")}
+                onRefreshDevice={() => void deviceStatus.mutate()}
+              />
+            ) : null}
+            {view === "optimization" ? (
+              <OptimizationView
+                key={account}
+                account={account}
+                api={api}
+                run={run}
+                busy={!!busy}
+                onOpenControl={() => changeView("control")}
+              />
+            ) : null}
+            {view === "accounts" ? (
+              <AccountsView
+                account={account}
+                api={api}
+                run={run}
+                onSelect={(nextAccount) => {
+                  setAccount(nextAccount);
+                  setAccountInput(nextAccount);
+                  const nextDevice = bootstrap.data?.devices.find(
+                    (item) =>
+                      item.account_id === nextAccount &&
+                      Date.now() - Date.parse(item.updated_at) < 90000,
+                  );
+                  if (nextDevice) setDevice(nextDevice.id);
+                  changeView("reports");
+                }}
               />
             ) : null}
             {view === "analysis" ? (

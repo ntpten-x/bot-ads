@@ -23,7 +23,15 @@ const paths: Record<string, string[]> = {
   scan: ["M8 3H3v5", "M16 3h5v5", "M21 16v5h-5", "M8 21H3v-5", "M7 12h10"],
   image: ["M3 4h18v16H3Z", "m3 16 5-5 4 4 4-5 5 6", "M8 8h.1"],
   check: ["m5 12 4 4 10-10", "M21 12a9 9 0 1 1-9-9"],
+  target: [
+    "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8",
+    "M12 2v3",
+    "M12 19v3",
+    "M2 12h3",
+    "M19 12h3",
+  ],
   search: ["M21 21l-6-6", "M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0"],
+  chart: ["M4 20V10", "M10 20V4", "M16 20v-7", "M22 20H2"],
 };
 export function Icon({ name }: { name: string }) {
   return (

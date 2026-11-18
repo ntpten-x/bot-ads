@@ -427,6 +427,8 @@ export function evaluateCaptureRow(
   let rowAttribution: string | null = null;
   let resultType: string | null = null;
   let name: string | null = null;
+  let campaignNameFromRow: string | null = null;
+  let adSetNameFromRow: string | null = null;
   let idFromColumn: string | null = null;
   for (const cell of row.cells) {
     const dimension = breakdownDimensionHeaders.find(([pattern]) =>
@@ -458,6 +460,16 @@ export function evaluateCaptureRow(
       continue;
     }
     seen.add(key);
+    if (key === "campaign_name") {
+      const value = cell.text.split("\n")[0].trim();
+      if (value && value !== "—") campaignNameFromRow = value;
+      continue;
+    }
+    if (key === "ad_set_name") {
+      const value = cell.text.split("\n")[0].trim();
+      if (value && value !== "—") adSetNameFromRow = value;
+      continue;
+    }
     const idKey =
       level === "campaigns"
         ? "campaign_id"
@@ -538,9 +550,8 @@ export function evaluateCaptureRow(
   const campaignName =
     level === "campaigns"
       ? name
-      : campaignId
-        ? (options.campaign_names?.get(campaignId) ?? null)
-        : null;
+      : campaignNameFromRow ??
+        (campaignId ? (options.campaign_names?.get(campaignId) ?? null) : null);
   if (level !== "campaigns" && campaignId && !campaignName)
     reasons.push("parent_campaign_not_promoted");
   const unique = [...new Set(reasons)];
@@ -584,6 +595,9 @@ export function evaluateCaptureRow(
     campaign_name: campaignName,
     ...(level !== "campaigns" ? { ad_set_id: adSetId } : {}),
     ...(level === "adsets" ? { ad_set_name: name } : {}),
+    ...(level === "ads" && adSetNameFromRow
+      ? { ad_set_name: adSetNameFromRow }
+      : {}),
     ...(level === "ads" ? { ad_id: id, ad_name: name } : {}),
     level: recordLevel[level],
     date_start: range!.date_start,

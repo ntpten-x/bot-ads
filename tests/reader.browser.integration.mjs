@@ -1,5 +1,9 @@
 import { chromium, expect } from "@playwright/test";
 import { build } from "esbuild";
+import { readFile } from "node:fs/promises";
+const manifest = JSON.parse(
+  await readFile("apps/extension/manifest.json", "utf8"),
+);
 const bundle = await build({
   entryPoints: ["apps/extension/src/reader.ts"],
   bundle: true,
@@ -88,7 +92,7 @@ try {
       .join("")}
     <input type="password" value="never-export" style="position:absolute;left:810px;top:65px">
   </div>`);
-  expect(geometry.reader_version).toBe("0.6.41");
+  expect(geometry.reader_version).toBe(manifest.version);
   expect(geometry.row_observations).toHaveLength(2);
   expect(geometry.row_observations.map((r) => r.name)).toEqual([
     "Same ad name",
@@ -345,7 +349,7 @@ try {
     </div>
   </div>`;
   const live = await read(liveShaped);
-  expect(live.reader_version).toBe("0.6.41");
+  expect(live.reader_version).toBe(manifest.version);
   expect(live.row_observations.map((r) => r.name)).toEqual(["Fixture 0", "Fixture 1", "Fixture 2", "Fixture 3"]);
   expect(live.row_observations[0].cells.find((c) => c.header === "แคมเปญ").text).toBe("Fixture 0");
   expect(live.row_observations[3].cells.find((c) => c.header === "แคมเปญ").text).toBe("Fixture 3");

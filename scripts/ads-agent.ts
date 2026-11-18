@@ -435,7 +435,7 @@ export function parseAgentOptions(args: string[]): AgentOptions {
 }
 
 export async function runAdsAgent(options: AgentOptions) {
-  const minimumVersion = process.env.AGENT_MIN_EXTENSION_VERSION ?? "0.6.41";
+  const minimumVersion = process.env.AGENT_MIN_EXTENSION_VERSION ?? "0.6.47";
   const verified = await verifyDevice(options.device, minimumVersion);
   log("device_ready", {
     account: verified.account,
@@ -446,24 +446,79 @@ export async function runAdsAgent(options: AgentOptions) {
     throw new Error(
       "Open the 15-minute report input/popup lease before starting ads automation",
     );
-  if (!options.skipNavigate)
-    await ensureAdsRoute(options.device, verified.account);
-  const reportColumns = options.skipPrepare
-    ? null
-    : await prepareReport(options.device, options.goal, verified.state);
-  if (reportColumns) log("report_columns", reportColumns);
-  const breakdown = options.breakdown.length
-    ? await prepareBreakdown(options.device, options.breakdown)
-    : null;
-  if (breakdown) log("breakdown", breakdown);
-
-  const job = await collect(
-    options.device,
-    verified.account,
-    options.maxSteps,
-    options.collectionTimeoutMs,
-    options.scanColumns,
-  );
+  let reportColumns:
+    | {
+        applied: boolean;
+        selected: string[];
+        pruned: string[];
+        missing_required: string[];
+        missing_goal_metrics: string[];
+      }
+    | null = null;
+  let breakdown: Awaited<ReturnType<typeof prepareBreakdown>> | null = null;
+  let job: Awaited<ReturnType<typeof waitForJob>>;
+  if (
+    !options.skipNavigate &&
+    !options.skipPrepare &&
+    !options.breakdown.length
+  ) {
+    const queued = await sendCommand(options.device, {
+      command: "report.collect",
+      goal: options.goal,
+      maxSteps: options.maxSteps,
+      scan_columns: options.scanColumns,
+    });
+    const receipt = await waitForCommand(options.device, queued.id, 300_000);
+    const report = receipt.result?.ui?.report;
+    const jobId = receipt.result?.job?.id;
+    if (
+      receipt.status !== "done" ||
+      receipt.result?.ok === false ||
+      report?.ok === false ||
+      report?.applied === false ||
+      !jobId
+    )
+      throw new Error(
+        report?.error ??
+          receipt.result?.error ??
+          "One-step report collection did not start",
+      );
+    if (!report || !jobId)
+      throw new Error("One-step report collection returned no job or report");
+    const appliedReport = report;
+    reportColumns = {
+      applied: appliedReport.applied === true,
+      selected: appliedReport.selected ?? [],
+      pruned: appliedReport.pruned ?? [],
+      missing_required: appliedReport.missing_required ?? [],
+      missing_goal_metrics: appliedReport.missing_goal_metrics ?? [],
+    };
+    log("report_columns", reportColumns);
+    log("collection_started", { job_id: jobId, account: verified.account });
+    job = await waitForJob(
+      options.device,
+      jobId,
+      options.collectionTimeoutMs,
+    );
+  } else {
+    if (!options.skipNavigate)
+      await ensureAdsRoute(options.device, verified.account);
+    reportColumns = options.skipPrepare
+      ? null
+      : await prepareReport(options.device, options.goal, verified.state);
+    if (reportColumns) log("report_columns", reportColumns);
+    breakdown = options.breakdown.length
+      ? await prepareBreakdown(options.device, options.breakdown)
+      : null;
+    if (breakdown) log("breakdown", breakdown);
+    job = await collect(
+      options.device,
+      verified.account,
+      options.maxSteps,
+      options.collectionTimeoutMs,
+      options.scanColumns,
+    );
+  }
   const persisted = await waitForCaptures(
     verified.account,
     job.id,

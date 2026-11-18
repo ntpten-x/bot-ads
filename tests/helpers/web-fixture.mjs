@@ -33,6 +33,9 @@ export async function cleanupWebFixture(account, device) {
     ])
       await client.query(`DELETE FROM ${table} WHERE account_id=$1`, [account]);
     await client.query("DELETE FROM ad_accounts WHERE id=$1", [account]);
+    await client.query("DELETE FROM managed_accounts WHERE account_id=$1", [
+      account,
+    ]);
     await client.query("DELETE FROM bot_commands WHERE device_id=$1", [device]);
     await client.query("DELETE FROM bot_devices WHERE id=$1", [device]);
     await client.query("COMMIT");

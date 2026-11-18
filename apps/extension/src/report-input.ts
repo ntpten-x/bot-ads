@@ -267,6 +267,9 @@ export async function resetReportScrollWithInput(
     observation && typeof observation === "object" && "target_diagnostics" in observation
       ? (observation as { target_diagnostics?: unknown }).target_diagnostics
       : undefined;
+  const scrollbarSignature = (observation: {
+    vertical_scrollbar?: unknown;
+  }) => JSON.stringify(observation.vertical_scrollbar ?? null);
   const changedRows = (
     before: Extract<NonNullable<Observation>, { ready: true }>,
     after: Extract<NonNullable<Observation>, { ready: true }>,
@@ -293,7 +296,7 @@ export async function resetReportScrollWithInput(
     // after two consecutive identical probes so a settled repaint is safe to
     // input, while a continuously moving view still fails closed.
     let current = before;
-    let settledSignature = before.signature;
+    let settledSignature = scrollbarSignature(before);
     let settled = false;
     const settleUntil = Math.min(deadline, Date.now() + 1600);
     do {
@@ -305,11 +308,11 @@ export async function resetReportScrollWithInput(
           diagnostics(observed),
         );
       current = observed;
-      if (observed.signature === settledSignature) {
+      if (scrollbarSignature(observed) === settledSignature) {
         settled = true;
         break;
       }
-      settledSignature = observed.signature;
+      settledSignature = scrollbarSignature(observed);
     } while (Date.now() < settleUntil);
     if (!settled)
       return stopped(
@@ -355,7 +358,7 @@ export async function resetReportScrollWithInput(
       const hovered = await observe();
       if (!hovered?.ready)
         return stopped(hovered?.reason ?? "no_reporting_observation", diagnostics(hovered));
-      if (hovered.signature !== baseline.signature)
+      if (scrollbarSignature(hovered) !== scrollbarSignature(baseline))
         return stopped("reporting_view_changed_before_input", diagnostics(hovered));
       const drag = hovered.vertical_scrollbar;
       if (
@@ -841,7 +844,7 @@ export async function scrollReportWithInput(
 export async function prepareReportWithInput(
   binding: Binding,
   goal: "messages" | "sales" | "leads",
-  options: { visibleOnly?: boolean } = {},
+  options: { visibleOnly?: boolean; reuseIfReady?: boolean } = {},
 ) {
   type TraceEntry = {
     op: string;
@@ -986,10 +989,14 @@ export async function prepareReportWithInput(
       l.expires_at <= Date.now()
     )
       throw new Error("เปิดโหมดเมาส์และคีย์บอร์ดสำหรับรายงานใน Extension ก่อน");
-    const tab = await chrome.tabs.get(binding.tabId);
+    let tab = await chrome.tabs.get(binding.tabId);
+    if (!tab.active) {
+      await chrome.tabs.update(binding.tabId, { active: true });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      tab = await chrome.tabs.get(binding.tabId);
+    }
     const u = new URL(tab.url ?? "");
     if (
-      !tab.active ||
       u.protocol !== "https:" ||
       u.port !== "" ||
       !["adsmanager.facebook.com", "business.facebook.com"].includes(
@@ -999,7 +1006,11 @@ export async function prepareReportWithInput(
       u.searchParams.get("act") !== binding.account
     )
       throw new Error(
-        "Bound reporting tab must remain active with the same account",
+        "Bound reporting tab has a different URL or account",
+      );
+    if (!tab.active)
+      throw new Error(
+        "Bound reporting tab remained inactive after reactivation",
       );
   };
   let expectedQuery: string | undefined;
@@ -1457,6 +1468,54 @@ export async function prepareReportWithInput(
     attached = true;
     phase = "inspect_table";
     const initialHeaders = await probe("table_headers");
+    if (options.reuseIfReady) {
+      const headers = initialHeaders.headers ?? [];
+      const missingRendered = fields
+        .filter(
+          (field) =>
+            blocking(field) &&
+            !headers.some((header) => headerMatchesField(header, field)),
+        )
+        .map((field) => field.key);
+      const extraHeaders = headers.filter(
+        (header) => !keepsRenderedHeader(header),
+      );
+      if (!missingRendered.length && !extraHeaders.length) {
+        selected.push(
+          ...desired
+            .filter((field) =>
+              headers.some((header) => headerMatchesField(header, field)),
+            )
+            .map((field) => field.key),
+        );
+        record({
+          op: "rendered_headers_reused",
+          phase,
+          kind: "done",
+          debug: { headers: headers.slice(0, 40) },
+        });
+        return {
+          ok: true,
+          goal,
+          selected,
+          missing,
+          pruned,
+          missing_required: [],
+          missing_goal_metrics: fields
+            .filter(
+              (field) => field.required && !blocking(field) && missing.includes(field.key),
+            )
+            .map((field) => field.key),
+          applied: true,
+          trace,
+          input_mode: "chrome_input" as const,
+          rendered_headers: headers.slice(0, 40),
+          missing_rendered_fields: [],
+          extra_rendered_headers: [],
+          reused: true,
+        };
+      }
+    }
     const menu = await wait(
       "menu",
       (candidate) => candidate.kind === "click" || candidate.kind === "done",

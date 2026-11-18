@@ -147,6 +147,20 @@ try {
   expect(await meta.evaluate(() => [...document.querySelectorAll('#headers [role=columnheader]')].map(h => h.textContent))).not.toContain("Purchases");
   expect(await meta.evaluate(() => [...document.querySelectorAll('#headers [role=columnheader]')].map(h => h.textContent))).not.toContain("ROAS (ผลตอบแทนจากค่าใช้จ่ายในการโฆษณา)");
   expect(result.rendered_headers).toContain("Amount spent ↓");
+  const trustedBeforeReuse = await meta.evaluate(() => window.trustedEvents);
+  const reused = await worker.evaluate(
+    (b) =>
+      TrustedReportFixture.prepareReportWithInput(b, "messages", {
+        reuseIfReady: true,
+      }),
+    binding,
+  );
+  expect(reused.ok, JSON.stringify(reused)).toBe(true);
+  expect(reused.reused).toBe(true);
+  expect(reused.applied).toBe(true);
+  expect(await meta.evaluate(() => window.trustedEvents)).toBe(
+    trustedBeforeReuse,
+  );
   expect(await meta.evaluate(() => window.selected.has("reach_variant"))).toBe(false);
   expect(await meta.evaluate(() => window.available.find(f => f.key === "reach").helper)).toContain("Context changed");
   expect(await meta.evaluate(() => window.trustedEvents)).toBeGreaterThan(0);

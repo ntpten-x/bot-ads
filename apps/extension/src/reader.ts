@@ -1230,7 +1230,7 @@ export function readVisibleTable() {
   }
   return {
     account_id: url.searchParams.get("act"),
-    reader_version: "0.6.41",
+    reader_version: "0.6.47",
     page: url.pathname,
     level,
     captured_at: new Date().toISOString(),

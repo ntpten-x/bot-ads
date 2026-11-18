@@ -1,12 +1,33 @@
 # AI handoff และรูปแบบการพัฒนาระบบ
 
+งานล่าสุดที่ต้องอ่านก่อนเริ่มแก้:
+[HANDOFF_OPTIMIZATION_2026-11-18.md](HANDOFF_OPTIMIZATION_2026-11-18.md)
+
 งาน Ads automation/Breakdown รอบล่าสุดมีรายละเอียดส่งต่อที่
 [HANDOFF_ADS_AUTOMATION_2026-11-16.md](HANDOFF_ADS_AUTOMATION_2026-11-16.md)
 
 สถานะรวมถึง CSV-first reconciliation และ source separation ณ 17 พฤศจิกายน 2026 อยู่ที่
 [HANDOFF_ADS_ANALYSIS_2026-11-17.md](HANDOFF_ADS_ANALYSIS_2026-11-17.md)
 
-เอกสารส่งต่องาน ณ 17 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.41 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+เอกสารส่งต่องาน ณ 18 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.47 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+
+0.6.42 เพิ่ม `report.collect` typed workflow (navigate → prepare report columns → start Ads collection ภายใน Extension command เดียว), Ads-only parent-name materialization, job-level `/captures/jobs/:job/review`, paged/scoped `/export`, PostgreSQL `/insights/trend`, และ Report Studio materialize/context flow. Ads captures ที่มี ID + ชื่อ Campaign/Ad Set ในคอลัมน์สามารถ upsert parent entities ได้โดยไม่ต้องอ่าน hierarchy ก่อน. Report Studio poll เฉพาะงานที่กำลังรันและซ่อน observed rows จากกราฟเป็นค่าเริ่มต้น. ห้ามถือว่า parent name จาก Ads row เป็นหลักฐาน ID; parent IDs ยังต้องมาจาก stable columns/links. Live 0.6.42 พบว่า workflow ถูกส่งถึง Extension แต่ trusted report-input guard ปฏิเสธเพราะแท็บ Meta ไม่ active. 0.6.43 activate/focus/maximize ช่วงเริ่ม workflow แต่ live rerun ยัง fail ระหว่าง dialog; 0.6.44 re-activate bound tab ก่อน trusted input ทุกครั้งจน workflow ผ่าน. Live 0.6.44 พบว่า native custom-scrollbar reset รอ signature ทั้งตารางจน `reporting_view_changed_before_input` จาก metric refresh ทำให้เริ่ม scroll ผิดตำแหน่ง; 0.6.45 จำกัด reset stability เฉพาะ scrollbar geometry และยังยืนยัน row movement หลัง drag. Live 0.6.45 job `67c9bf13-99ba-47b6-95a5-a7ce8e54c4ba` อ่าน 40/40 Ads, 3 snapshots, 87 observations, verified IDs 40, unresolved 0 และ `coverage=complete` สำหรับ scope นี้; materialization ได้ 74 promoted rows และ 35 unique normalized observations โดย 8 raw rows ยังขาด Impressions ตามจริง.
+
+Report Studio เพิ่ม CSV-vs-DOM reconciliation ผ่าน `packages/core/src/reconciliation.ts` และรายงานแยก matched IDs/dom-only/csv-only พร้อม Spend/Results deltas เฉพาะ context ที่ตรงกัน. เพิ่ม `report_preferences` (migration `005`) สำหรับ target CPA/ROAS ต่อ account; กราฟใช้เป็น reference line เท่านั้น ไม่สร้างคำแนะนำอัตโนมัติ. `/export` ไม่ควรถูกใช้เป็นแหล่งเทียบทั้งบัญชีโดยไม่มี filter; reconciliation ต้องใช้ stable IDs และไม่รวม metrics จากสอง source.
+
+0.6.46 เพิ่ม fast refresh ใน `report.collect`: อ่าน rendered headers ก่อน ถ้า blocking columns ครบและไม่มี extra headers จะ reuse view และข้าม dialog. Report Studio เพิ่ม persistent normalized coverage จาก `/captures/jobs/:job/materialization` เพื่อแสดง verified Ads เทียบ normalized Ads/observations และ reason ที่ยัง block. Scale fixtures ครอบคลุม 500 Ads และ daily trend 365 วัน.
+
+Live 0.6.46 fast refresh ใช้ command เพียง 2.68 วินาที แต่ coverage ลดเหลือ 31/40 เพราะ start ปล่อย alarm รอบก่อนทำงานก่อน read zoom/layout พร้อม. 0.6.47 clear collect alarm, apply zoom แล้วเรียก `advance()` ทันทีหนึ่งครั้งก่อนสร้าง alarm รอบถัดไป; Fast mode ต้องยืนยัน 40/40 ก่อนถือว่าผ่าน.
+
+Live 0.6.47 fast-refresh passed: job `148d1780-4877-49eb-a52d-0ed657a807b5` collected 40/40 Ads in two snapshots with 58 raw observations, verified IDs 40, unresolved 0, no blockers and `coverage=complete`. `report.collect` completed in 7.92 seconds versus 122.05 seconds for the full-prepare path. Materialization produced 50 promoted raw rows and 35 unique normalized observations; remaining rows stayed `needs_review` because Meta omitted Impressions.
+
+Database-first report cache: `006_capture_report_cache` stores the fully analyzed Report per capture job and canonical operator context. Materialization/review writes the cache; `/captures/analysis` returns it without replying on CSV or reparsing raw snapshots. Cache is invalidated whenever new snapshots are stored. Live 40-Ad job measured 31 ms cold analysis and 3.68 ms cached response.
+
+Multi-account hardening uses migrations `007_managed_accounts` and `008_customer_access`: managed account/customer registry, SHA-256 API client tokens, admin/operator/viewer roles, per-account health/acceptance and disable gating. Local `API_TOKEN` remains bootstrap admin. Non-admin requests are rejected when Account/Device/Capture job ownership does not match the client customer. UI account health is at `/#accounts`; client tokens are one-time display and never stored plaintext.
+
+Operations hardening adds migration `009_operations_hardening`: `admin_audit_log` records customer/account/token changes and scheduled collection queueing; `account_collection_schedules` stores an opt-in read-only `report.collect` schedule per account. The scheduler requires an enabled account/customer, a fresh Device with `report_input=true`, and no pending/running command. It retries errors at most three times with a bounded delay and never changes a Meta ad. Account health now reads normalized Ads from the latest capture job, not all historical jobs, and does not mark an account fully ready when its Device heartbeat is stale.
+
+Customer isolation is enforced for all client-token roles, including a Customer-scoped `admin`: it cannot list other Customers. Disabling an account or Customer blocks state ingestion, imports, analysis previews, commands and report operations, and also disables configured schedules. Existing local admin can still inspect historical raw data. Live health and UI must still be rechecked after using a newly switched Meta account; account acceptance is never inherited from another account.
 
 CSV-first analysis รอบ 17 พฤศจิกายน 2026 เพิ่ม `reconciliation` และ `scope_coverage` ใน shared import contract: การกระทบยอดจำนวนแถว/Spend ยืนยันเฉพาะ scope ของไฟล์ ไม่ยกระดับ `coverage` ทั้งบัญชีจาก `unverified` Backend ประทับ `raw._import_reconciliation` หลัง validation และ Analysis แยกกลุ่ม `csv`/`dom_capture`/`unknown` โดยไม่บวกยอดข้ามแหล่ง อย่าลบ proof นี้หรือรวมยอด CSV กับ DOM แม้ ID/เงื่อนไขจะตรงกัน; รายละเอียดและผลทดสอบอยู่ใน [ANALYSIS.md](ANALYSIS.md) และ [VALIDATION.md](VALIDATION.md)
 
@@ -111,7 +132,7 @@ Reliability รอบล่าสุด: อ่าน [ANALYSIS.md ส่วน 
 - ไม่เพิ่ม Graph/Marketing API, Meta access token, internal endpoint, network interception หรือการหลบระบบตรวจจับ
 - ไม่อ่านหรือส่งออก password, cookie, session credential ของ Meta
 - ไม่ข้ามการอนุมัติใน popup หรือเพิ่ม endpoint ให้บอทอนุมัติตัวเอง
-- ทำงานในเครื่องเป็นหลัก ยังไม่ใช่ระบบหลายลูกค้าที่แยกสิทธิ์แบบ multi-tenant
+- ทำงานในเครื่องเป็นหลัก แต่มี customer/account ownership, role และ token revocation สำหรับการใช้งานหลายลูกค้าบนเครื่องนี้; ยังไม่ได้ออกแบบเป็น public multi-tenant deployment
 - ไม่กล่าวว่าเก็บครบหรือดำเนินการสำเร็จหากมีเพียง raw capture หรือ action dispatch
 
 ## 2. สถาปัตยกรรม
@@ -163,7 +184,7 @@ CSV → validate → quality report → transactional import / UPSERT → export
 5. Execute action ที่มีชนิดชัดเจน แล้ว observe หน้าซ้ำ บันทึกผลหรือ error ตามจริง
 6. บันทึก checkpoint และสถานะ เพื่อหยุด/ทำต่อได้โดยไม่ยิง mutation ซ้ำแบบเดาสุ่ม
 
-Shared command รองรับ start/pause/resume/status, ui.action, ui.navigate, ui.focus, ui.screenshot และ report.prepare อ่าน payload จริงจาก control.ts และ BOT.md ก่อนเพิ่มผู้เรียก
+Shared command รองรับ start/pause/resume/status, ui.action, ui.navigate, ui.focus, ui.screenshot, report.prepare และ report.collect อ่าน payload จริงจาก control.ts และ BOT.md ก่อนเพิ่มผู้เรียก
 
 หลักปฏิบัติ:
 
@@ -315,6 +336,21 @@ Integration บางชุดต้องมี API/PostgreSQL และ .env �
 
 Repo: https://github.com/ntpten-x/bot-ads.git; branch ปัจจุบัน master ติดตาม origin/master ก่อน push ตรวจ remote/branch จริงอีกครั้ง ไม่ force push และไม่ stage งานอื่นที่ไม่เกี่ยวข้องโดยไม่ตรวจ
 
-Token ฝั่งเว็บเก็บใน sessionStorage ส่วน account/device preferences อยู่ localStorage อย่านำ token ลง public environment variable หรือ client bundle Backend เป็น local single-operator token scope ยังไม่มี per-customer authorization อย่าเปลี่ยนเป็น public deployment โดยถือว่า production-ready แล้ว
+Token ฝั่งเว็บเก็บใน sessionStorage ส่วน account/device preferences อยู่ localStorage อย่านำ token ลง public environment variable หรือ client bundle Local `API_TOKEN` เป็น bootstrap admin และ client token ถูกจำกัดตาม Customer/role. แม้มี tenant isolation แล้ว การเปิด Backend สู่ public network, TLS, identity provider และ production secret management ยังอยู่นอกขอบเขต; อย่าถือว่า public deployment พร้อมใช้งาน
 
 เอกสาร PLAN/VALIDATION มีประวัติหลายรุ่น หากข้อมูลขัดกัน ให้อ่าน source ปัจจุบันและผลทดสอบที่มีวันที่/ขอบเขตชัดเจน แล้วแก้เอกสารให้ตรง อย่าทำให้ความสามารถดูมากกว่าหลักฐาน
+
+## Optimization Loop — migration 010
+
+Migration `010_optimization_loop` adds entity versions, creative metadata,
+per-account policies, deterministic recommendations, optimization plans/steps,
+action receipts, rollback plans, experiments, outcome observations and campaign
+templates. The Recommendation Engine requires a complete Ads scope, one result
+type, verified IDs/costs and enough peers; estimated spend is never eligible.
+
+`/#optimization` supports recommendation review, policy editing, plan creation,
+plan approval, experiment tracking, Creative metadata, Campaign templates and
+latest-capture outcome observation. Plan approval is distinct from local
+Extension approval. `automated_meta_mutation` remains false until certified page
+adapters and verified readback are implemented. See
+[OPTIMIZATION.md](OPTIMIZATION.md).

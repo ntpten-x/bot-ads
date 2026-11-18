@@ -171,6 +171,27 @@ async function verifiedTab(job: Job) {
     throw new Error("Tab or account changed; collection stopped");
   return tab;
 }
+async function waitForTabComplete(tabId: number, timeoutMs = 45_000) {
+  const current = await chrome.tabs.get(tabId);
+  if (current.status === "complete") return current;
+  return await new Promise<chrome.tabs.Tab>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      reject(new Error("รอหน้า Ads Manager โหลดไม่เสร็จ"));
+    }, timeoutMs);
+    const listener = (
+      updatedTabId: number,
+      changeInfo: { status?: string },
+      tab: chrome.tabs.Tab,
+    ) => {
+      if (updatedTabId !== tabId || changeInfo.status !== "complete") return;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve(tab);
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
 async function advance() {
   if (busy) return;
   busy = true;
@@ -418,7 +439,7 @@ async function publishSoon() {
     /* The periodic bridge tick retries. */
   }
 }
-async function perform(message: any) {
+async function perform(message: any): Promise<any> {
   if (
     typeof message?.command === "string" &&
     message.command.startsWith("ui.")
@@ -468,6 +489,64 @@ async function perform(message: any) {
     return {
       ui,
       ...(!result.result.ok ? { ok: false, error: result.result.error } : {}),
+    };
+  }
+  if (message?.command === "report.collect") {
+    if (busy || (await getJob())?.status === "running")
+      throw new Error("พักงานอ่านตารางก่อนเริ่มรายงานใหม่");
+    const validated = botCommandSchema.parse({
+      command: message.command,
+      goal: message.goal,
+      maxSteps: message.maxSteps,
+      scan_columns: message.scan_columns,
+    });
+    if (validated.command !== "report.collect")
+      throw new Error("Invalid report workflow");
+    const bridge = await getBridge();
+    if (!bridge?.enabled) throw new Error("เชื่อมต่อ Extension ก่อน");
+    if (!(await chrome.permissions.contains({ origins })))
+      throw new Error("Grant Meta reading permission in the extension first");
+    let tab = await chrome.tabs.get(bridge.tabId);
+    suiteUrl(tab.url ?? "", bridge.account);
+    if (
+      needsReportingNavigation(tab.url ?? "", bridge.account, "ads", []) ||
+      tab.status !== "complete"
+    ) {
+      await chrome.tabs.update(bridge.tabId, {
+        url: reportingUrl(bridge.account, "ads").href,
+        active: true,
+      });
+      tab = await waitForTabComplete(bridge.tabId);
+      suiteUrl(tab.url ?? "", bridge.account);
+    }
+    await chrome.tabs.update(bridge.tabId, { active: true });
+    if (tab.windowId !== undefined)
+      await chrome.windows.update(tab.windowId, {
+        focused: true,
+        state: "maximized",
+      });
+    const report = await prepareReportWithInput(bridge, validated.goal, {
+      reuseIfReady: true,
+    });
+    const inspected = await controlUi(
+      { command: "ui.action", action: { type: "inspect", max_controls: 150 } },
+      bridge,
+    );
+    const ui = { ...inspected.ui, report };
+    await chrome.storage.local.set({ uiState: ui });
+    if (!report.ok)
+      throw new Error(report.error ?? "Report column setup failed");
+    const started: any = await perform({
+      command: "start",
+      levels: ["ads"],
+      maxSteps: validated.maxSteps,
+      scan_columns: validated.scan_columns,
+      tabId: bridge.tabId,
+      account: bridge.account,
+    });
+    return {
+      ui,
+      ...started,
     };
   }
   if (message?.command === "breakdown.prepare") {
@@ -646,6 +725,7 @@ async function perform(message: any) {
     case "start": {
       if (busy || (await getJob())?.status === "running")
         throw new Error("Pause the active job first");
+      await chrome.alarms.clear("collect");
       if (!(await chrome.permissions.contains({ origins })))
         throw new Error("Grant Meta reading permission in the extension first");
       const tabId = Number(message.tabId),
@@ -692,6 +772,8 @@ async function perform(message: any) {
         });
       await put(job);
       await applyReadZoom(job);
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      void advance();
       // Meta keeps the saved report columns in the current page instance.
       // Navigating to the same report route again can reset that transient view.
       const navigate = needsReportingNavigation(

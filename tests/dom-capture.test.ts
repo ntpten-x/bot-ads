@@ -323,6 +323,32 @@ test("child levels need DOM parent IDs and a promoted parent campaign", () => {
   assert.equal(adReady.record?.ad_id, "333");
 });
 
+test("Ads capture can materialize verified parent names from visible columns", () => {
+  const ad = snapshot({
+    page: "/adsmanager/manage/ads",
+    row_observations: [
+      row({
+        identity: "333",
+        parent_ids: { campaign_id: "111", ad_set_id: "222" },
+        cells: [
+          { header: "โฆษณา", text: "Fixture ad" },
+          { header: "ชื่อแคมเปญ", text: "Fixture campaign" },
+          { header: "ชื่อชุดโฆษณา", text: "Fixture ad set" },
+          { header: "ผลลัพธ์", text: "16\nMessages" },
+          { header: "จำนวนเงินที่ใช้จ่ายไป", text: "฿100.00" },
+          { header: "อิมเพรสชัน", text: "1,000" },
+          { header: "การตั้งค่าการระบุที่มา", text: "7-day click" },
+        ],
+      }),
+    ],
+  });
+  const evaluated = evaluateSnapshot(ad, options)[0];
+  assert.equal(evaluated.status, "ready", evaluated.reasons.join(","));
+  assert.equal(evaluated.record?.campaign_name, "Fixture campaign");
+  assert.equal(evaluated.record?.ad_set_name, "Fixture ad set");
+  assert.equal(evaluated.record?.ad_id, "333");
+});
+
 test("snapshot fingerprint is stable for identical captures", () => {
   assert.equal(
     snapshotFingerprint(snapshot()),

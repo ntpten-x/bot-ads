@@ -14,6 +14,8 @@ import {
 } from "../../../packages/core/src/dom-capture.js";
 import { recordKey, type AdRecord } from "../../../packages/core/src/index.js";
 import { analyzeCaptureJob } from "../../../packages/core/src/capture-analysis.js";
+import { reconcileDomWithCsv } from "../../../packages/core/src/reconciliation.js";
+import { assertManagedAccountEnabled } from "./accounts.js";
 
 /**
  * Persistence for Extension DOM captures. Every snapshot reported by the
@@ -67,13 +69,14 @@ async function promote(
   for (const { index, record: r } of items) {
     await client.query("SAVEPOINT row_promotion");
     try {
-      if (r.level === "campaign") {
-        await client.query(
-          "INSERT INTO campaigns(account_id,id,name,details) VALUES($1,$2,$3,'{}') ON CONFLICT(account_id,id) DO UPDATE SET name=excluded.name",
-          [r.account_id, r.campaign_id, r.campaign_name],
-        );
-      }
-      if (r.level === "adset") {
+      // Ads-level captures include parent campaign/ad set names in their selected
+      // columns. Upsert those verified parents before the child row so an Ads-only
+      // report can be materialized without first reading every hierarchy level.
+      await client.query(
+        "INSERT INTO campaigns(account_id,id,name,details) VALUES($1,$2,$3,'{}') ON CONFLICT(account_id,id) DO UPDATE SET name=COALESCE(excluded.name,campaigns.name)",
+        [r.account_id, r.campaign_id, r.campaign_name],
+      );
+      if (r.level === "adset" || r.level === "ad") {
         const prior = await client.query(
           "SELECT campaign_id FROM ad_sets WHERE account_id=$1 AND id=$2",
           [r.account_id, r.ad_set_id],
@@ -191,6 +194,13 @@ function snapshotStatus(
   };
 }
 
+const operatorContextKey = (operator: OperatorContext) =>
+  JSON.stringify(
+    Object.entries(operator)
+      .filter(([, value]) => value !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
+
 /** Evaluate rows of a stored snapshot and promote the ready ones. Already promoted rows are kept. */
 async function reviewStored(
   client: PoolClient,
@@ -221,7 +231,8 @@ async function reviewStored(
     return {
       status: "rejected",
       reasons: ["invalid_snapshot_shape"],
-      rows: [],
+      rows: 0,
+      promoted: 0,
     };
   }
   const snapshot: DomSnapshot = parsed.data;
@@ -297,6 +308,83 @@ async function reviewStored(
   };
 }
 
+/** Re-evaluate every snapshot in one capture job with an explicit operator context. */
+async function reviewStoredJob(
+  client: PoolClient,
+  jobId: string,
+  account: string,
+  operator?: OperatorContext,
+) {
+  await client.query("SELECT pg_advisory_xact_lock(4318003)");
+  const job = await client.query(
+    "SELECT id FROM capture_jobs WHERE id=$1 AND account_id=$2",
+    [jobId, account],
+  );
+  if (!job.rowCount) return null;
+  const snapshots = await client.query(
+    "SELECT id FROM capture_snapshots WHERE job_id=$1 AND bound_account=$2 ORDER BY captured_at,id",
+    [jobId, account],
+  );
+  let rows = 0;
+  let promoted = 0;
+  const reasons = new Set<string>();
+  for (const snapshot of snapshots.rows) {
+    const result = await reviewStored(client, snapshot.id, operator);
+    if (!result) continue;
+    rows += result.rows;
+    promoted += result.promoted;
+    for (const reason of result.reasons) reasons.add(reason);
+  }
+  const rawSnapshots = await client.query(
+    "SELECT raw FROM capture_snapshots WHERE job_id=$1 AND bound_account=$2 AND review_status<>'rejected' ORDER BY captured_at",
+    [jobId, account],
+  );
+  const parsedSnapshots = rawSnapshots.rows
+    .map((row) => domSnapshotSchema.safeParse(row.raw))
+    .filter((result) => result.success && result.data.account_id === account)
+    .map((result) => result.data!);
+  const analysis = analyzeCaptureJob(parsedSnapshots, {
+    operator: operator ?? {},
+  });
+  await client.query(
+    `INSERT INTO capture_job_reports(job_id,context_key,operator_context,analysis)
+     VALUES($1,$2,$3,$4)
+     ON CONFLICT(job_id,context_key) DO UPDATE SET analysis=excluded.analysis,operator_context=excluded.operator_context,updated_at=now()`,
+    [
+      jobId,
+      operatorContextKey(operator ?? {}),
+      JSON.stringify(operator ?? {}),
+      JSON.stringify(analysis),
+    ],
+  );
+  const status =
+    !rows
+      ? "needs_review"
+      : promoted === rows
+        ? "promoted"
+        : promoted
+          ? "partially_promoted"
+          : "needs_review";
+  const unique = await client.query(
+    `SELECT count(DISTINCT r.grain_key)::int AS count
+     FROM capture_rows r
+     JOIN capture_snapshots s ON s.id=r.snapshot_id
+     WHERE s.job_id=$1 AND r.review_status='promoted' AND r.grain_key IS NOT NULL`,
+    [jobId],
+  );
+  return {
+    job_id: jobId,
+    status,
+    snapshots: snapshots.rowCount ?? 0,
+    rows,
+    promoted,
+    unique_observations: unique.rows[0]?.count ?? 0,
+    report_cached: true,
+    report_coverage: analysis.data_quality.coverage,
+    reasons: [...reasons],
+  };
+}
+
 /** Store every snapshot of an Extension job. Idempotent: identical snapshots are stored once. */
 export async function persistJob(
   pool: Pool,
@@ -361,6 +449,10 @@ export async function persistJob(
       stored++;
       if (s) await reviewStored(client, id);
     }
+    if (stored)
+      await client.query("DELETE FROM capture_job_reports WHERE job_id=$1", [
+        job.data.id,
+      ]);
     await client.query("COMMIT");
     return { stored };
   } catch (e) {
@@ -373,10 +465,30 @@ export async function persistJob(
 
 export function captureRoutes(pool: Pool) {
   const router = Router();
+  const operatorFromQuery = (query: Record<string, unknown>) => {
+    const confirm = (value: unknown) =>
+      value === "true" ? (true as const) : undefined;
+    return operatorContextSchema.parse({
+      ...(typeof query.timezone === "string" ? { timezone: query.timezone } : {}),
+      ...(typeof query.attribution === "string"
+        ? { attribution: query.attribution }
+        : {}),
+      ...(typeof query.result_type === "string"
+        ? { result_type: query.result_type }
+        : {}),
+      ...(confirm(query.confirm_no_breakdown)
+        ? { confirm_no_breakdown: true }
+        : {}),
+      ...(confirm(query.confirm_no_filters)
+        ? { confirm_no_filters: true }
+        : {}),
+    });
+  };
   // Performance analysis of one capture job (latest by default). Visible-only and
   // labelled as unverified; registered before /captures/:id so "analysis" is not an id.
   router.get("/captures/analysis", async (req, res) => {
     const account = z.string().regex(/^\d+$/).parse(req.query.account_id);
+    await assertManagedAccountEnabled(pool, account);
     const requested = z
       .uuid()
       .optional()
@@ -393,12 +505,34 @@ export function captureRoutes(pool: Pool) {
       res.status(404).json({ error: "No Extension captures for this account" });
       return;
     }
-    const meta = await pool.query(
-      "SELECT id,status,levels,error,level_warnings,extension_version,first_seen_at,updated_at FROM capture_jobs WHERE id=$1 AND account_id=$2",
-      [job, account],
-    );
+    const operator = operatorFromQuery(req.query);
+    const operatorKey = operatorContextKey(operator);
+    const [meta, jobs, cached] = await Promise.all([
+      pool.query(
+        "SELECT id,status,levels,error,level_warnings,extension_version,first_seen_at,updated_at FROM capture_jobs WHERE id=$1 AND account_id=$2",
+        [job, account],
+      ),
+      pool.query(
+        "SELECT job_id,max(captured_at) AS captured_at,count(*)::int AS snapshots FROM capture_snapshots WHERE bound_account=$1 AND job_id IS NOT NULL GROUP BY job_id ORDER BY max(captured_at) DESC LIMIT 20",
+        [account],
+      ),
+      pool.query(
+        "SELECT analysis,updated_at FROM capture_job_reports WHERE job_id=$1 AND context_key=$2",
+        [job, operatorKey],
+      ),
+    ]);
     if (!meta.rowCount) {
       res.status(404).json({ error: "Capture job not found for this account" });
+      return;
+    }
+    if (cached.rowCount) {
+      res.json({
+        job: meta.rows[0],
+        jobs: jobs.rows,
+        ...cached.rows[0].analysis,
+        report_cached: true,
+        report_cached_at: cached.rows[0].updated_at,
+      });
       return;
     }
     const s = await pool.query(
@@ -409,37 +543,104 @@ export function captureRoutes(pool: Pool) {
       .map((r) => domSnapshotSchema.safeParse(r.raw))
       .filter((p) => p.success && p.data.account_id === account)
       .map((p) => p.data!);
-    const jobs = await pool.query(
-      "SELECT job_id,max(captured_at) AS captured_at,count(*)::int AS snapshots FROM capture_snapshots WHERE bound_account=$1 AND job_id IS NOT NULL GROUP BY job_id ORDER BY max(captured_at) DESC LIMIT 20",
-      [account],
+    const analysis = analyzeCaptureJob(snapshots, { operator });
+    await pool.query(
+      `INSERT INTO capture_job_reports(job_id,context_key,operator_context,analysis)
+       VALUES($1,$2,$3,$4)
+       ON CONFLICT(job_id,context_key) DO UPDATE SET analysis=excluded.analysis,operator_context=excluded.operator_context,updated_at=now()`,
+      [job, operatorKey, JSON.stringify(operator), JSON.stringify(analysis)],
     );
-    const confirm = (value: unknown) =>
-      value === "true" ? (true as const) : undefined;
-    const operator = operatorContextSchema.parse({
-      ...(typeof req.query.timezone === "string"
-        ? { timezone: req.query.timezone }
-        : {}),
-      ...(typeof req.query.attribution === "string"
-        ? { attribution: req.query.attribution }
-        : {}),
-      ...(typeof req.query.result_type === "string"
-        ? { result_type: req.query.result_type }
-        : {}),
-      ...(confirm(req.query.confirm_no_breakdown)
-        ? { confirm_no_breakdown: true }
-        : {}),
-      ...(confirm(req.query.confirm_no_filters)
-        ? { confirm_no_filters: true }
-        : {}),
-    });
     res.json({
       job: meta.rows[0],
       jobs: jobs.rows,
-      ...analyzeCaptureJob(snapshots, { operator }),
+      ...analysis,
+      report_cached: false,
     });
+  });
+  router.get("/captures/jobs/:job/reconciliation", async (req, res) => {
+    const job = z.uuid().parse(req.params.job);
+    const account = z.string().regex(/^\d+$/).parse(req.query.account_id);
+    await assertManagedAccountEnabled(pool, account);
+    const scopeKey = z.string().max(5000).parse(req.query.scope_key);
+    const operator = operatorFromQuery(req.query);
+    const snapshots = await pool.query(
+      "SELECT raw FROM capture_snapshots WHERE bound_account=$1 AND job_id=$2 AND review_status<>'rejected' ORDER BY captured_at",
+      [account, job],
+    );
+    const parsed = snapshots.rows
+      .map((row) => domSnapshotSchema.safeParse(row.raw))
+      .filter((result) => result.success && result.data.account_id === account)
+      .map((result) => result.data!);
+    const analysis = analyzeCaptureJob(parsed, { operator });
+    const level =
+      analysis.levels.find((item) => item.scope_key === scopeKey) ??
+      analysis.levels.find((item) => item.level === "ads");
+    if (!level) {
+      res.status(404).json({ error: "Capture scope not found" });
+      return;
+    }
+    if (!level.context.date_start || !level.context.date_end) {
+      res.status(409).json({ error: "Capture scope has no verified date range" });
+      return;
+    }
+    const rows = await pool.query(
+      `SELECT data FROM insight_observations
+       WHERE account_id=$1
+         AND level='ad'
+         AND date_start=$2
+         AND date_end=$3
+         AND data->'raw' ? '_source_filename'`,
+      [account, level.context.date_start, level.context.date_end],
+    );
+    res.json({
+      job_id: job,
+      scope_key: level.scope_key,
+      dom_source: "dom_capture",
+      reconciliation: reconcileDomWithCsv(
+        level,
+        rows.rows.map((row) => row.data as AdRecord),
+      ),
+    });
+  });
+  router.get("/captures/jobs/:job/materialization", async (req, res) => {
+    const job = z.uuid().parse(req.params.job);
+    const account = z.string().regex(/^\d+$/).parse(req.query.account_id);
+    await assertManagedAccountEnabled(pool, account);
+    const meta = await pool.query(
+      "SELECT id FROM capture_jobs WHERE id=$1 AND account_id=$2",
+      [job, account],
+    );
+    if (!meta.rowCount) {
+      res.status(404).json({ error: "Capture job not found" });
+      return;
+    }
+    const rows = await pool.query(
+      `SELECT
+         count(DISTINCT r.id)::int AS raw_rows,
+         count(DISTINCT r.id) FILTER (WHERE r.review_status='promoted')::int AS promoted_rows,
+         count(DISTINCT r.id) FILTER (WHERE r.review_status='needs_review')::int AS needs_review_rows,
+         count(DISTINCT r.entity_id) FILTER (WHERE r.entity_id IS NOT NULL)::int AS verified_ads,
+         count(DISTINCT r.entity_id) FILTER (
+           WHERE r.entity_id IS NOT NULL AND r.review_status='promoted'
+         )::int AS normalized_ads,
+         count(DISTINCT r.grain_key) FILTER (
+           WHERE r.grain_key IS NOT NULL AND r.review_status='promoted'
+         )::int AS normalized_observations,
+         coalesce(
+           jsonb_agg(DISTINCT to_jsonb(reason)) FILTER (WHERE reason IS NOT NULL),
+           '[]'::jsonb
+         ) AS reasons
+       FROM capture_rows r
+       JOIN capture_snapshots s ON s.id=r.snapshot_id
+       LEFT JOIN LATERAL jsonb_array_elements_text(r.review_reasons) reason ON true
+       WHERE s.job_id=$1`,
+      [job],
+    );
+    res.json({ job_id: job, ...rows.rows[0] });
   });
   router.get("/captures", async (req, res) => {
     const account = z.string().regex(/^\d+$/).parse(req.query.account_id);
+    await assertManagedAccountEnabled(pool, account);
     const status = z
       .enum(["needs_review", "partially_promoted", "promoted", "rejected"])
       .optional()
@@ -471,10 +672,55 @@ export function captureRoutes(pool: Pool) {
     );
     res.json({ ...s.rows[0], rows: rows.rows });
   });
+  router.post("/captures/jobs/:job/review", async (req, res) => {
+    const job = z.uuid().parse(req.params.job);
+    const account = z
+      .string()
+      .regex(/^\d+$/)
+      .parse(req.query.account_id);
+    await assertManagedAccountEnabled(pool, account);
+    const body = z
+      .object({ context: operatorContextSchema.optional() })
+      .strict()
+      .parse(req.body ?? {});
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await reviewStoredJob(
+        client,
+        job,
+        account,
+        body.context,
+      );
+      await client.query("COMMIT");
+      if (!result) {
+        res.status(404).json({ error: "Capture job not found" });
+        return;
+      }
+      res.json(result);
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
+  });
   // Re-evaluate a capture. The operator may confirm timezone/attribution/result type
   // exactly like the CSV import context; IDs, dates and currency must come from the page.
   router.post("/captures/:id/review", async (req, res) => {
     const id = z.uuid().parse(req.params.id);
+    const snapshotAccount = await pool.query(
+      "SELECT bound_account FROM capture_snapshots WHERE id=$1",
+      [id],
+    );
+    if (!snapshotAccount.rowCount) {
+      res.status(404).json({ error: "Capture not found" });
+      return;
+    }
+    await assertManagedAccountEnabled(
+      pool,
+      snapshotAccount.rows[0].bound_account,
+    );
     const body = z
       .object({ context: operatorContextSchema.optional() })
       .strict()

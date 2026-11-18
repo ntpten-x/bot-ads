@@ -1,4 +1,4 @@
-# ระบบข้อมูลวิเคราะห์โฆษณา 0.6.41
+# ระบบข้อมูลวิเคราะห์โฆษณา 0.6.47
 
 สถานะปัจจุบัน: ใช้กฎตรวจหลักฐานและประเมินต้นทุนที่อธิบายได้ ไม่ใช่บอทปรับงบหรือเผยแพร่อัตโนมัติ ดูการแก้ reliability และขั้นตอนรับรองรุ่นใหม่ท้ายเอกสาร หัวข้อรุ่นเก่าเก็บไว้เป็นประวัติ
 
@@ -16,7 +16,7 @@ UI แสดง `กระทบยอดไฟล์นี้แล้ว` แ�
 
 หน้าเว็บ: http://127.0.0.1:9321/#analysis → เมนู **ข้อมูลวิเคราะห์**
 
-1. Reload Extension ใน `chrome://extensions` ให้เป็น 0.6.41 แล้วเปิดบัญชี Meta และกด **เชื่อมต่อและทดสอบอ่าน**
+1. Reload Extension ใน `chrome://extensions` ให้เป็น 0.6.47 แล้วเปิดบัญชี Meta และกด **เชื่อมต่อและทดสอบอ่าน**
 2. เลือกบัญชีและอุปกรณ์ในหน้าเว็บ เลือกเป้าหมาย **ข้อความ / ยอดขาย / ลูกค้าเป้าหมาย**
 3. เปิด popup กด **เปิดเมาส์/คีย์บอร์ดรายงาน 15 นาที** แล้วกด **ตั้งคอลัมน์วิเคราะห์ใน Meta** ในหน้าเว็บ รอประมาณ 30 วินาทีสำหรับการรับคำสั่ง ตรวจผลว่าคอลัมน์หลักใดยังหาไม่พบ หาก Meta ใช้หน้าต่างที่ไม่รองรับให้เปิด Columns → Customize columns ด้วยตัวเอง แล้วเลือกตามรายการในหน้าเว็บ
 4. กด **อ่านค่าตาราง Ads** เปิดแท็บ Meta ค้างไว้ ระบบเลื่อนแนวนอนเพื่อเก็บคอลัมน์และแนวตั้งเพื่อเก็บแถว ภาพข้อมูลแต่ละภาพมีเวลา รุ่นตัวอ่าน ชื่อคอลัมน์ และหลักฐานแถวของตัวเอง แถวระหว่างภาพอาจซ้ำกัน
@@ -140,6 +140,8 @@ Chrome กำหนดให้ประกาศ permission `debugger` ใน m
 | `GET /captures?account_id=ACCOUNT_ID[&status=needs_review]` | รายการ snapshot ล่าสุด 200 รายการ พร้อมจำนวนแถว แถวที่มี ID แถวที่ยกขึ้นแล้ว และเหตุผล |
 | `GET /captures/CAPTURE_UUID` | รายละเอียด snapshot และทุกแถว (cells, identity, review_status, review_reasons) |
 | `POST /captures/CAPTURE_UUID/review` | ตรวจซ้ำ body `{"context":{"timezone":"Asia/Bangkok","attribution":"...","result_type":"..."}}` (ไม่บังคับ) ผู้ใช้ยืนยันได้เฉพาะ timezone/attribution/result type เหมือน CSV import; ID วันที่ และสกุลเงินต้องมาจากหน้า Meta |
+| `POST /captures/jobs/JOB_UUID/review?account_id=...` | Review/materialize ทุก snapshot ใน job ด้วย operator context เดียว; คืน promoted rows, unique observations และ reason ที่ยัง block |
+| `GET /captures/jobs/JOB_UUID/reconciliation?account_id=...&scope_key=...` | เทียบ DOM scope กับ CSV ที่เงื่อนไขตรงกันด้วย stable IDs และ metric deltas โดยไม่รวมแหล่งข้อมูล |
 
 Reason codes หลัก: `stable_id_unverified`, `parent_campaign_id_unverified`, `parent_ad_set_id_unverified`, `parent_campaign_not_promoted`, `column_mapping_unverified`, `header_body_scroll_mismatch`, `date_range_unverified`, `currency_unverified`, `currency_conflict`, `timezone_unverified`, `attribution_unverified`, `result_type_unverified`, `missing_required_metric:spend`, `csv_observation_exists`, `duplicate_id_in_snapshot`
 
@@ -168,7 +170,7 @@ Live `0.6.37` รอบแรกเพิ่มจากหนึ่งเป็
 - แยก scope ตามบัญชี ระดับ ช่วงวันที่ สกุลเงิน เขตเวลา Attribution Breakdown และตัวกรอง รวมคอลัมน์ข้ามภาพด้วย stable ID ที่ยืนยันแล้วเท่านั้น; ไม่มี ID ให้เก็บเป็น unresolved evidence ไม่เป็นจำนวนแอด ยอดรวม หรืออันดับ
 - `unique_rows` / `verified_unique_rows` คือจำนวนตัวตนที่ยืนยันได้; `observed_rows` คือหลักฐานดิบที่อาจซ้ำ `unresolved_observations` คือหลักฐานที่ยังเชื่อมตัวตนไม่ได้ แยก `delivery_counts` ของตัวตนที่ยืนยันจาก `delivery_observation_counts` ของหลักฐานดิบ
 - `coverage=complete` รับรองเพียงจำนวน ID ตรง footer ภายใน scope ที่ตรวจแล้ว และไม่มีข้อขัดแย้ง ไม่รับรองทั้งบัญชี Meta; Breakdown partition ที่เห็นเฉพาะ footer รวมทั้งรายงานใช้ `coverage=lower_bound` และห้ามนำไปคิดเป็น `x/40` หรือบวกข้าม Age ค่า `needs_review` ยังต้องตรวจเสมอ
-- Web panel ส่งเฉพาะบริบทที่ผู้ใช้ยืนยันจริงไปยัง `/captures/analysis`: timezone, attribution, ไม่มีตัวกรอง และไม่มี Breakdown โดยเก็บค่าไว้ใน localStorage และไม่เดาค่าแทนผู้ใช้; live check ยืนยันว่าเมื่อยืนยัน Asia/Bangkok + no filters แล้ว result group และอันดับแสดงได้
+- Web panel ส่งเฉพาะบริบทที่ผู้ใช้ยืนยันจริงไปยัง `/captures/analysis`: timezone, attribution, result type, ไม่มีตัวกรอง และไม่มี Breakdown โดยเก็บค่าไว้ใน localStorage และไม่เดาค่าแทนผู้ใช้; ปุ่ม materialize ใช้ context เดียวกัน review ทุก snapshot ของ job
 - ค่าใหม่กว่าของ ID/เงื่อนไขเดิมใช้แทนค่าเก่าพร้อม provenance; ค่าขัดกันในเวลาเดียวกันหรือ ID ซ้ำในภาพถูกระงับการสรุป ค่า unknown ใหม่ไม่ใช้ค่าเก่ากลบ ส่วนข้อมูลต่างช่วงวัน/หน่วยไม่รวมกัน
 - `spend_quality` และ `data_quality.spend` มี `reported`, `estimated`, `mixed`, `missing` อ้างอิงค่าที่อ่านได้จริง ไม่ใช่หัวคอลัมน์ `mixed` ครอบคลุมค่าขาดหายบางรายการด้วย ต้องดูแหล่งค่ารายแถว
 - ไม่มีหลักฐาน Breakdown/ตัวกรองให้เป็น `null` พร้อม blockers; `{}`/`[]` ใช้เมื่อมีหลักฐานชัดเจนว่าไม่มีการแจกแจง/ตัวกรองเท่านั้น ปัจจุบัน reader ระบุส่วนนี้ว่ายังไม่ยืนยัน จึงควรใช้ validated CSV สำหรับผลรวมและการประเมินเมื่อบริบทบนหน้าไม่ครบ
