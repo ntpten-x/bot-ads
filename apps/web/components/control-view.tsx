@@ -566,7 +566,7 @@ export default function ControlView({
               <input
                 type="number"
                 min={1}
-                max={20}
+                max={60}
                 value={steps}
                 onChange={(e) => setSteps(Number(e.target.value))}
               />

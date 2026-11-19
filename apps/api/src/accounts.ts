@@ -306,7 +306,7 @@ async function claimScheduledCollection(pool: Pool) {
         JSON.stringify({
           command: "report.collect",
           goal,
-          maxSteps: 20,
+          maxSteps: 60,
           scan_columns: false,
         }),
       ],

@@ -583,7 +583,7 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
       await send({
         command: "report.collect",
         goal: "messages",
-        maxSteps: 20,
+        maxSteps: 60,
         scan_columns: false,
       });
       changeView("reports");

@@ -57,7 +57,7 @@ test("accept typed UI commands and refuse JS, selectors and remote approvals", (
     {
       command: "report.collect",
       goal: "messages",
-      maxSteps: 20,
+      maxSteps: 40,
       scan_columns: false,
     },
   );
@@ -65,7 +65,7 @@ test("accept typed UI commands and refuse JS, selectors and remote approvals", (
     { command: "eval", code: "alert(1)" },
     { command: "reportInputSession", action: "enable" },
     { command: "report.prepare", goal: "messages", method: "Runtime.evaluate" },
-    { command: "report.collect", goal: "messages", maxSteps: 21 },
+    { command: "report.collect", goal: "messages", maxSteps: 61 },
     { command: "uiSession", action: "approve" },
     { command: "ui.action", action: { type: "click", selector: "button" } },
     { command: "ui.action", action: { type: "inspect" }, tabId: 999 },

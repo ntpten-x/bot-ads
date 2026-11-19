@@ -116,6 +116,51 @@ await withReportInputFixture(
     );
     expect(sameNamesNewIds.moved).toBe(true);
 
+    setFixture(`<div style="position:relative;width:900px;height:250px">
+      <div role="columnheader" style="position:absolute;left:0;top:0;width:80px;height:40px">On / Off</div>
+      <div role="columnheader" style="position:absolute;left:80px;top:0;width:420px;height:40px">Ad</div>
+      <div role="columnheader" style="position:absolute;left:500px;top:0;width:400px;height:40px">Results</div>
+      <div id="transient-body" style="position:absolute;top:40px;left:0;width:900px;height:200px;overflow:hidden">
+        ${[0, 1]
+          .map(
+            (index) =>
+              `<div role="switch" style="position:absolute;left:10px;top:${20 + index * 60}px;width:40px;height:25px"></div><a class="transient-name" href="/adsmanager/manage/ads?act=123456789&selected_ad_ids=44${index}" style="position:absolute;left:90px;top:${20 + index * 60}px;width:410px;height:25px">Before ${index}</a><div style="position:absolute;left:520px;top:${20 + index * 60}px;width:200px;height:25px">10</div>`,
+          )
+          .join("")}
+      </div>
+    </div>
+    <script>
+      window.transientWheels = 0;
+      document.querySelector('#transient-body').addEventListener('wheel', (event) => {
+        if (!event.isTrusted || window.transientGap) return;
+        window.transientWheels++;
+        window.transientGap = true;
+        document.querySelectorAll('.transient-name').forEach((node) => {
+          node.textContent = '';
+          node.removeAttribute('href');
+        });
+        setTimeout(() => {
+          document.querySelectorAll('.transient-name').forEach((node, index) => {
+            node.textContent = 'After ' + index;
+            node.href = '/adsmanager/manage/ads?act=123456789&selected_ad_ids=55' + index;
+          });
+        }, 350);
+      });
+    </script>`);
+    await meta.goto(
+      "https://adsmanager.facebook.com/adsmanager/manage/ads?act=123456789&transient=1",
+    );
+    await meta.bringToFront();
+    const transientIdentity = await worker.evaluate(
+      (current) => TrustedReportFixture.scrollReportWithInput(current),
+      pagingBinding,
+    );
+    expect(transientIdentity.moved, JSON.stringify(transientIdentity)).toBe(
+      true,
+    );
+    expect(transientIdentity.method).toBe("native_wheel");
+    expect(await meta.evaluate(() => window.transientWheels)).toBe(1);
+
     setFixture(`<div id="page-status">1–200 จาก 400</div>
       <div style="position:relative;width:900px;height:260px">
         <div role="columnheader" style="position:absolute;left:0;top:0;width:400px;height:36px">Ad</div>

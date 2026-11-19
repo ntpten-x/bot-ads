@@ -9,7 +9,7 @@
 สถานะรวมถึง CSV-first reconciliation และ source separation ณ 17 พฤศจิกายน 2026 อยู่ที่
 [HANDOFF_ADS_ANALYSIS_2026-11-17.md](HANDOFF_ADS_ANALYSIS_2026-11-17.md)
 
-เอกสารส่งต่องาน ณ 19 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.72 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+เอกสารส่งต่องาน ณ 19 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.73 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
 
 Data lifecycle ล่าสุดอยู่ที่ [DATA_LIFECYCLE.md](DATA_LIFECYCLE.md): catalog Ads,
 status history, monthly rollups, raw retention, dry-run CLI/API และ policy
@@ -427,3 +427,13 @@ dialog has no Save action. If the dialog is already open, the guarded
 prune/verify/Save path from `0.6.70` still applies. Fixture validation is
 recorded in [VALIDATION.md](VALIDATION.md); live Meta acceptance requires
 reloading Extension `0.6.72`.
+
+Extension `0.6.73` fixes a live partial-collection stop where Meta removed row
+text/links briefly during a virtualized-grid repaint. The scroll probe now
+retries `row_fingerprint_unavailable` for a bounded period inside the same input
+step instead of treating the repaint as a failed page. `report.collect` and
+scheduled read-only collection use up to 60 steps (contract default 40), because
+the live 794-Ad scope collected only 115 IDs in five steps with the old
+20-step ceiling. Chrome's transient tab-drag error is retried with bounded
+backoff before reporting command failure. Live acceptance of the new build
+still requires reloading Extension `0.6.73`.

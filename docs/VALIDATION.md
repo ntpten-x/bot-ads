@@ -1985,6 +1985,46 @@ without `reuseIfReady` and verifies `ok=true`, `reused=true`, a closed dialog an
 no additional trusted events. The lease gate, column pruning, stale-header
 rejection and open-dialog recovery fixtures also pass.
 
+## Partial Ads collection after virtualized repaint — 0.6.73
+
+Live `0.6.72` accepted a fresh read-only `report.collect` command and persisted
+five snapshots for a Meta scope reporting 794 Ads. The snapshots contained 115
+distinct stable Ad IDs and no duplicate IDs. Collection then ended
+`needs_review` with `row_fingerprint_unavailable`.
+
+The failing wheel had moved the grid, but the immediate post-input probe caught
+Meta while row text and links were temporarily absent during a virtualized
+repaint. The previous code treated that transient observation as a permanent
+scroll failure and ended the job. A separate earlier command also failed before
+collection with Chrome's transient
+`Tabs cannot be edited right now (user may be dragging a tab)` error.
+
+`0.6.73` makes two bounded corrections:
+
+- `scrollReportWithInput` re-probes `row_fingerprint_unavailable` for up to 1.2
+  seconds inside the same guarded input step. It still fails closed for account,
+  route, lease, modal and non-transient observation errors.
+- Tab navigation/activation retries only the exact transient tab-drag error,
+  with four attempts and bounded exponential delay.
+
+The old UI ceiling of 20 steps was also insufficient for the observed rate:
+five steps covered 115 of 794 IDs. `report.collect` and scheduled collection now
+request 60 steps, while the shared contract accepts 1–60 and defaults to 40.
+
+Validation passed:
+
+- RED fixture reproduced a 350 ms identity gap after a trusted wheel; it
+  returned `row_fingerprint_unavailable`.
+- GREEN fixture waits for the repaint and proves movement by the newly
+  introduced stable IDs with exactly one trusted wheel.
+- `test:report-input-paging`
+- `test:report-scroll`
+- `npm test` (95 tests)
+
+Live completion of the 794-Ad scope remains unproven until Extension `0.6.73`
+is reloaded and a fresh job completes. Until then, 115/794 must remain reported
+as partial coverage.
+
 ## Data lifecycle validation — 19 Nov 2026
 
 Migration `014_data_lifecycle` was applied locally without deleting existing

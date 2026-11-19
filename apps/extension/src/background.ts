@@ -25,6 +25,7 @@ import {
   scrollReportingTable,
   waitForReportingRows,
 } from "./reader.js";
+import { retryTabEdit } from "./tab-retry.js";
 type Level = "campaigns" | "adsets" | "ads";
 type Job = {
   id: string;
@@ -258,7 +259,9 @@ async function advance() {
     let tab = await verifiedTab(job);
     if (tab.status !== "complete") return;
     if (!tab.active) {
-      await chrome.tabs.update(job.tabId, { active: true });
+      await retryTabEdit(() =>
+        chrome.tabs.update(job.tabId, { active: true }),
+      );
       if (tab.windowId !== undefined)
         await chrome.windows.update(tab.windowId, {
           focused: true,
@@ -544,13 +547,15 @@ async function advance() {
       return;
     }
     await put(job);
-    await chrome.tabs.update(job.tabId, {
-      url: reportingUrl(
-        job.account,
-        job.levels[job.index],
-        job.breakdown_params,
-      ).href,
-    });
+    await retryTabEdit(() =>
+      chrome.tabs.update(job.tabId, {
+        url: reportingUrl(
+          job.account,
+          job.levels[job.index],
+          job.breakdown_params,
+        ).href,
+      }),
+    );
   } catch (e) {
     const job = await getJob();
     if (job && job.status === "running") {
@@ -619,7 +624,9 @@ async function perform(message: any): Promise<any> {
     const tab = await chrome.tabs.get(bridge.tabId);
     suiteUrl(tab.url ?? "", bridge.account);
     if (tab.status !== "complete") throw new Error("รอหน้า Meta โหลดก่อนตั้งคอลัมน์");
-    await chrome.tabs.update(bridge.tabId, { active: true });
+    await retryTabEdit(() =>
+      chrome.tabs.update(bridge.tabId, { active: true }),
+    );
     if (tab.windowId !== undefined)
       await chrome.windows.update(tab.windowId, { focused: true });
     const result = {
@@ -657,14 +664,18 @@ async function perform(message: any): Promise<any> {
       needsReportingNavigation(tab.url ?? "", bridge.account, "ads", []) ||
       tab.status !== "complete"
     ) {
-      await chrome.tabs.update(bridge.tabId, {
-        url: reportingUrl(bridge.account, "ads").href,
-        active: true,
-      });
+      await retryTabEdit(() =>
+        chrome.tabs.update(bridge.tabId, {
+          url: reportingUrl(bridge.account, "ads").href,
+          active: true,
+        }),
+      );
       tab = await waitForTabComplete(bridge.tabId);
       suiteUrl(tab.url ?? "", bridge.account);
     }
-    await chrome.tabs.update(bridge.tabId, { active: true });
+    await retryTabEdit(() =>
+      chrome.tabs.update(bridge.tabId, { active: true }),
+    );
     if (tab.windowId !== undefined)
       await chrome.windows.update(tab.windowId, {
         focused: true,
@@ -716,7 +727,9 @@ async function perform(message: any): Promise<any> {
     suiteUrl(tab.url ?? "", bridge.account);
     if (tab.status !== "complete")
       throw new Error("รอหน้า Meta โหลดก่อนตั้ง Breakdown");
-    await chrome.tabs.update(bridge.tabId, { active: true });
+    await retryTabEdit(() =>
+      chrome.tabs.update(bridge.tabId, { active: true }),
+    );
     if (tab.windowId !== undefined)
       await chrome.windows.update(tab.windowId, { focused: true });
     const breakdown = await configureBreakdownWithInput(
@@ -861,7 +874,9 @@ async function perform(message: any): Promise<any> {
       )
         job.tabId = boundTab;
       const resumeTab = await verifiedTab(job);
-      await chrome.tabs.update(job.tabId, { active: true });
+      await retryTabEdit(() =>
+        chrome.tabs.update(job.tabId, { active: true }),
+      );
       if (resumeTab.windowId !== undefined)
         await chrome.windows.update(resumeTab.windowId, {
           focused: true,
@@ -895,8 +910,8 @@ async function perform(message: any): Promise<any> {
       )
         throw new Error("Invalid levels");
       const maxSteps = Number(message.maxSteps ?? 5);
-      if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 20)
-        throw new Error("maxSteps must be 1–20");
+      if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 60)
+        throw new Error("maxSteps must be 1–60");
       const job: Job = {
         id: crypto.randomUUID(),
         tabId,
@@ -937,18 +952,20 @@ async function perform(message: any): Promise<any> {
         levels[0],
         job.breakdown_params,
       );
-      await chrome.tabs.update(tabId, {
-        ...(navigate
-          ? {
-              url: reportingUrl(
-                account,
-                levels[0],
-                job.breakdown_params,
-              ).href,
-            }
-          : {}),
-        active: true,
-      });
+      await retryTabEdit(() =>
+        chrome.tabs.update(tabId, {
+          ...(navigate
+            ? {
+                url: reportingUrl(
+                  account,
+                  levels[0],
+                  job.breakdown_params,
+                ).href,
+              }
+            : {}),
+          active: true,
+        }),
+      );
       await chrome.alarms.create("collect", { periodInMinutes: 0.5 });
       return { job };
     }

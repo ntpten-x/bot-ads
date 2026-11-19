@@ -551,7 +551,7 @@ export async function scrollReportWithInput(
     )
       throw new Error("collection_context_changed");
   };
-  const observe = async () => {
+  const observeOnce = async () => {
     await guard();
     const [r] = await chrome.scripting.executeScript({
       target: source,
@@ -559,6 +559,22 @@ export async function scrollReportWithInput(
       args: [binding.account],
     });
     return r?.result;
+  };
+  const observe = async () => {
+    const until = Math.min(deadline, Date.now() + 1_200);
+    let observation = await observeOnce();
+    // Meta can briefly remove row text and links while its virtualized grid
+    // repaints after a wheel. That gap is not proof that the visible rows did
+    // not move, so re-probe within the same bounded input step.
+    while (
+      !observation?.ready &&
+      observation?.reason === "row_fingerprint_unavailable" &&
+      Date.now() < until
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      observation = await observeOnce();
+    }
+    return observation;
   };
   try {
     const before = await observe();

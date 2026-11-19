@@ -114,7 +114,7 @@ Business Suite ที่ไม่มี `act` ใน URL อ่านได้ �
 
 `{"command":"start","levels":["ads"],"maxSteps":5,"scan_columns":true}` อ่านแถวและเลื่อนคอลัมน์ที่เปิดอยู่แบบจำกัด ผลเป็น raw observations ไม่ใช่ normalized Insights
 
-`{"command":"report.collect","goal":"messages","maxSteps":20,"scan_columns":false}` เป็น typed workflow สำหรับหน้า Report Studio: ตรวจ bridge/permission, navigate ไป Ads route เมื่อจำเป็น, ตั้งคอลัมน์, ตรวจผล แล้วเริ่ม start ภายใน command เดียว ช่วยลด idle time จาก command queue โดยไม่เพิ่ม JS/selector/CDP payload และยังต้องใช้ local report-input lease
+`{"command":"report.collect","goal":"messages","maxSteps":60,"scan_columns":false}` เป็น typed workflow สำหรับหน้า Report Studio: ตรวจ bridge/permission, navigate ไป Ads route เมื่อจำเป็น, ตั้งคอลัมน์, ตรวจผล แล้วเริ่ม start ภายใน command เดียว ช่วยลด idle time จาก command queue โดยไม่เพิ่ม JS/selector/CDP payload และยังต้องใช้ local report-input lease ค่า `maxSteps` สูงสุด 60 และ default จาก contract คือ 40 เพื่อให้ scope ที่มีหลายร้อย Ads มีรอบเลื่อนเพียงพอ
 
 CLI: `npm run bot -- DEVICE_UUID prepare sales` และ `npm run bot -- DEVICE_UUID collect ads`
 

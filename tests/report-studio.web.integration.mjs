@@ -283,7 +283,7 @@ try {
   expect(commandPayloads[0]).toEqual({
     command: "report.collect",
     goal: "messages",
-    maxSteps: 20,
+    maxSteps: 60,
     scan_columns: false,
   });
   await expect(

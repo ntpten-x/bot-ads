@@ -441,7 +441,7 @@ export default function ReportStudioView({
         const id = await send({
           command: "report.collect",
           goal,
-          maxSteps: 20,
+          maxSteps: 60,
           scan_columns: false,
         });
         setWorkflowCommand(id);

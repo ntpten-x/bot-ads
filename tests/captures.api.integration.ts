@@ -1163,7 +1163,7 @@ try {
      ORDER BY created_at DESC LIMIT 1`,
     [device],
   );
-  assert.equal(scheduledCommand.rows[0].command.maxSteps, 20);
+  assert.equal(scheduledCommand.rows[0].command.maxSteps, 60);
   assert.equal(scheduledCommand.rows[0].command.scan_columns, false);
   assert.equal(
     (
