@@ -25,6 +25,8 @@ Ads report (coverage complete)
 - coverage ต้อง `complete` และไม่มี blockers
 - ใช้ผลลัพธ์ประเภทเดียวกัน ไม่รวม Messages กับ Purchases
 - แต่ละ Ads ต้องมี stable ID, verified mapping, Results และ Spend จากคอลัมน์
+- Ads ที่มี `payment_error`, `off` หรือ `parent_off` เป็น diagnostic เท่านั้น;
+  ไม่ถูกนับเป็น peer, ไม่มีผลกับ median และไม่สร้าง action
 - ต้องมี peers อย่างน้อยตาม `min_peer_rows`
 - Median CPA/Cost per result คำนวณภายใน scope เดียวกัน
 - Spend ที่ estimate จาก Results × Cost/result ไม่ใช้สร้างคำสั่งปรับงบ
@@ -37,7 +39,7 @@ Action ที่ระบบสร้างได้:
 | Action | ความหมาย |
 | --- | --- |
 | `scale_budget` | ต้นทุนต่ำกว่า median ตาม policy และมี Budget ที่อ่านได้; ยังไม่เปลี่ยนงบเอง |
-| `duplicate_winner` | Ads มีประสิทธิภาพดีหรือปิดอยู่แต่ต้นทุนดี เหมาะทำสำเนาเป็น Draft เพื่อทดลอง |
+| `duplicate_winner` | Ads ที่มีประสิทธิภาพดีแต่ไม่มี Budget ที่อ่านได้ เหมาะทำสำเนาเป็น Draft เพื่อทดลอง; Ads ที่ปิดอยู่ไม่ถูกนำมาสร้างข้อเสนอนี้ |
 | `pause_candidate` | ต้นทุนสูงกว่า median ตาม policy; ต้องตรวจ volume และบริบทก่อนหยุด |
 | `create_new_test` | Ads อยู่ระดับกลาง ใช้เป็นฐานสร้าง Variant พร้อม Experiment |
 

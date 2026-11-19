@@ -1,5 +1,8 @@
 // Executed in the isolated world. Never accesses cookies, page JS state or network APIs.
-export function readVisibleTable() {
+import manifest from "../manifest.json";
+
+export function readVisibleTableUnsafe(readerVersion: string): any {
+  try {
   const url = new URL(location.href);
   if (
     !["adsmanager.facebook.com", "business.facebook.com"].includes(
@@ -111,25 +114,20 @@ export function readVisibleTable() {
     // Never invent row relationships or assign numbers to metrics from this fallback.
     const headers = [
       ...document.querySelectorAll<HTMLElement>('[role="columnheader"]'),
-    ].filter(headerReadable);
+    ].filter(visible);
     if (headers.length >= 2) {
       let common: HTMLElement | null = headers[0].parentElement;
       while (common && !headers.every((h) => common!.contains(h)))
         common = common.parentElement;
-      let container = common;
+      let container: HTMLElement | null = common ?? document.body;
       const markerSelector =
         '[role="switch"],[role="gridcell"],[role="cell"],input[type="checkbox"],[role="checkbox"]';
-      while (container && container !== document.body) {
+      while (container) {
         const markers = [
           ...container.querySelectorAll<HTMLElement>(markerSelector),
         ].filter((el) => {
           if (!visible(el) || el.closest('[role="columnheader"]')) return false;
-          // The header select-all checkbox is not a row marker.
-          const r = el.getBoundingClientRect();
-          return (
-            r.top + r.height / 2 >
-            Math.max(...headers.map((h) => h.getBoundingClientRect().bottom))
-          );
+          return true;
         });
         if (markers.length) {
           const parts: string[] = [];
@@ -174,6 +172,7 @@ export function readVisibleTable() {
             };
           break;
         }
+        if (container === document.body) break;
         container = container.parentElement;
       }
     }
@@ -186,10 +185,31 @@ export function readVisibleTable() {
   // Geometry is evidence for review, never an assertion of stable identity.
   // Keep each visible cell attached to its observed row and source header.
   // Geometry is evidence for review; stable identity only comes from IDs exposed in the DOM.
-  const observedHeaders = [
+  const readerDiagnostics = {
+    visible_headers: 0,
+    readable_headers: 0,
+    observed_headers: 0,
+    unstructured: false,
+    header_bottom: 0,
+    switches: 0,
+    checkboxes: 0,
+    anchors: 0,
+    bands: 0,
+    text_nodes: 0,
+    mapped_text_nodes: 0,
+    mapped_rows: 0,
+  };
+  const readableHeaders = [
     ...document.querySelectorAll<HTMLElement>('[role="columnheader"],thead th'),
-  ]
-    .filter(headerReadable)
+  ].filter(headerReadable);
+  const visibleHeaders = [
+    ...document.querySelectorAll<HTMLElement>('[role="columnheader"],thead th'),
+  ].filter(visible);
+  const observedHeaders = (
+    readableHeaders.length >= 2
+      ? readableHeaders
+      : visibleHeaders
+  )
     .map((el) => ({
       label: el.innerText.trim(),
       rect: el.getBoundingClientRect(),
@@ -204,9 +224,22 @@ export function readVisibleTable() {
             Math.abs(o.rect.top - h.rect.top) < 1,
         ) === i,
     );
+  readerDiagnostics.visible_headers = visibleHeaders.length;
+  readerDiagnostics.readable_headers = readableHeaders.length;
+  readerDiagnostics.observed_headers = observedHeaders.length;
+  readerDiagnostics.unstructured = !!unstructured;
+  readerDiagnostics.switches = [
+    ...document.querySelectorAll('[role="switch"]'),
+  ].filter(visible).length;
+  readerDiagnostics.checkboxes = [
+    ...document.querySelectorAll(
+      'input[type="checkbox"],[role="checkbox"]',
+    ),
+  ].filter(visible).length;
   const headersBottom = observedHeaders.length
     ? Math.max(...observedHeaders.map((h) => h.rect.bottom))
     : 0;
+  readerDiagnostics.header_bottom = Math.round(headersBottom);
   const level = url.pathname.replace(/\/$/, "").endsWith("/ads")
     ? "ads"
     : url.pathname.replace(/\/$/, "").endsWith("/adsets")
@@ -448,7 +481,7 @@ export function readVisibleTable() {
   }
   const geometryParents: { center: number; row: Observation }[] = [];
   let geometryScope: Element | null = null;
-  if (!row_observations.length && unstructured && observedHeaders.length >= 2) {
+  if (!row_observations.length && observedHeaders.length >= 2) {
     let scope: Element | null =
       document.querySelector('[role="columnheader"]')?.parentElement ?? null;
     while (
@@ -470,17 +503,18 @@ export function readVisibleTable() {
       });
     const anchorKinds = ['[role="switch"]', 'input[type="checkbox"],[role="checkbox"]'];
     let anchorSelector = anchorKinds[0];
-    while (scope && scope !== document.body) {
+    while (scope) {
       const kind = anchorKinds.find((k) => markersIn(scope!, k).length);
       if (kind) {
         anchorSelector = kind;
         break;
       }
+      if (scope === document.body) break;
       scope = scope.parentElement;
     }
     if (anchorSelector !== anchorKinds[0])
       warnings.push("Rows anchored by selection checkboxes because no on/off switches were visible.");
-    if (scope && scope !== document.body) {
+    if (scope) {
       geometryScope = scope;
       const anchors = markersIn(scope, anchorSelector)
         .map((el) => ({ el, rect: el.getBoundingClientRect() }))
@@ -488,6 +522,7 @@ export function readVisibleTable() {
         .filter(
           (a, i, all) => i === 0 || Math.abs(a.rect.top - all[i - 1].rect.top) > 4,
         );
+      readerDiagnostics.anchors = anchors.length;
       const centers = anchors.map((a) => a.rect.top + a.rect.height / 2);
       const bands = centers.map((y, i) => {
         let row: Element | null = anchors[i].el.parentElement;
@@ -507,6 +542,7 @@ export function readVisibleTable() {
           bottom: i < centers.length - 1 ? (y + centers[i + 1]) / 2 : y + 24,
         };
       });
+      readerDiagnostics.bands = bands.length;
       // Meta renders a summary row under the last entity row. Its label and
       // totals must never join a row band; its row count is kept for coverage.
       const footerPattern =
@@ -562,6 +598,7 @@ export function readVisibleTable() {
         const node = walker.currentNode,
           parent = node.parentElement,
           text = node.textContent?.trim();
+        readerDiagnostics.text_nodes++;
         if (
           !parent ||
           !text ||
@@ -615,6 +652,7 @@ export function readVisibleTable() {
           (h) => left >= h.rect.left - 2 && right <= h.rect.right + 2,
         );
         if (row < 0 || headers.length !== 1) continue;
+        readerDiagnostics.mapped_text_nodes++;
         const h = headers[0].label,
           parts = cells[row].get(h) ?? [];
         // Geometric Y bands cannot join frozen IDs to newly scrolled metric
@@ -646,6 +684,7 @@ export function readVisibleTable() {
         .map((a) => ({ a, rect: a.getBoundingClientRect() }));
       cells.forEach((map, i) => {
         if (!map.size) return;
+        readerDiagnostics.mapped_rows++;
         const band = bands[i];
         const rowLinks = scopeLinks
           .filter(({ rect }) => {
@@ -1228,9 +1267,9 @@ export function readVisibleTable() {
       );
     }
   }
-  return {
+  const result = {
     account_id: url.searchParams.get("act"),
-    reader_version: "0.6.47",
+    reader_version: readerVersion,
     page: url.pathname,
     level,
     captured_at: new Date().toISOString(),
@@ -1243,6 +1282,7 @@ export function readVisibleTable() {
     column_alignment_diagnostics,
     row_alignment,
     row_alignment_diagnostics,
+    reader_diagnostics: readerDiagnostics,
     header_mode: headerMode,
     breakdown_diagnostics,
     reporting_context: {
@@ -1263,6 +1303,43 @@ export function readVisibleTable() {
     coverage: "visible_only",
     warnings,
   };
+  if (!result.tables.length && !result.row_observations.length) {
+    return {
+      ...result,
+      tables: [],
+      row_observations: [],
+      unstructured: result.unstructured,
+      reader_result_bytes: JSON.stringify(result).length,
+    };
+  }
+  return JSON.parse(JSON.stringify(result)) as typeof result;
+  } catch (error) {
+    return {
+      tables: [],
+      row_observations: [],
+      unstructured: null,
+      reader_error: error instanceof Error ? error.message : String(error),
+      reader_diagnostics: null,
+    };
+  }
+}
+
+export function readVisibleTable(): ReturnType<typeof readVisibleTableUnsafe> & {
+  reader_error?: string;
+} {
+  try {
+    return readVisibleTableUnsafe(manifest.version);
+  } catch (error) {
+    return {
+      tables: [],
+      row_observations: [],
+      unstructured: null,
+      reader_error: error instanceof Error ? error.message : String(error),
+      reader_diagnostics: null,
+    } as unknown as ReturnType<typeof readVisibleTableUnsafe> & {
+      reader_error?: string;
+    };
+  }
 }
 export function scrollReportingTable(
   direction: "vertical" | "horizontal" | "reset_horizontal" = "vertical",
@@ -1454,7 +1531,20 @@ export async function waitForReportingRows(timeoutMs = 8000) {
     );
   };
   const started = Date.now();
-  let diagnostics = { headers: 0, switches: 0, checkboxes: 0, rows: 0, loading: 0 };
+  let diagnostics: {
+    headers: number;
+    switches: number;
+    checkboxes: number;
+    rows: number;
+    loading: number;
+    debug?: unknown;
+  } = {
+    headers: 0,
+    switches: 0,
+    checkboxes: 0,
+    rows: 0,
+    loading: 0,
+  };
   while (Date.now() - started < timeoutMs) {
     const headers = [...document.querySelectorAll('[role="columnheader"],thead th')].filter(visible);
     const bottom = headers.length
@@ -1466,12 +1556,61 @@ export async function waitForReportingRows(timeoutMs = 8000) {
         const r = el.getBoundingClientRect();
         return r.top + r.height / 2 > bottom;
       }).length;
+    const chain = (el: Element) => {
+      const values: { tag: string; role: string | null; top: number; height: number }[] = [];
+      for (
+        let current: Element | null = el;
+        current && current !== document.documentElement && values.length < 8;
+        current = current.parentElement
+      ) {
+        const rect = current.getBoundingClientRect();
+        values.push({
+          tag: current.tagName.toLowerCase(),
+          role: current.getAttribute("role"),
+          top: Math.round(rect.top),
+          height: Math.round(rect.height),
+        });
+      }
+      return values;
+    };
+    const visibleSwitches = [
+      ...document.querySelectorAll<HTMLElement>('[role="switch"]'),
+    ].filter(visible);
+    const visibleCheckboxes = [
+      ...document.querySelectorAll<HTMLElement>(
+        'input[type="checkbox"],[role="checkbox"]',
+      ),
+    ].filter(visible);
     diagnostics = {
       headers: headers.length,
       switches: below('[role="switch"]'),
       checkboxes: below('input[type="checkbox"],[role="checkbox"]'),
       rows: below('[role="row"],tbody tr'),
       loading: [...document.querySelectorAll('[role="progressbar"],[aria-busy="true"]')].filter(visible).length,
+      debug: {
+        header_labels: headers.slice(0, 16).map((el) =>
+          (el as HTMLElement).innerText.trim(),
+        ),
+        switch_chain: visibleSwitches[0] ? chain(visibleSwitches[0]) : [],
+        checkbox_chain: visibleCheckboxes[0]
+          ? chain(visibleCheckboxes[0])
+          : [],
+        aria_rows: document.querySelectorAll('[aria-rowindex]').length,
+        grid_roles: [
+          ...document.querySelectorAll(
+            '[role="grid"],[role="treegrid"],[role="table"],[role="rowgroup"]',
+          ),
+        ]
+          .filter(visible)
+          .slice(0, 6)
+          .map((el) => ({
+            role: el.getAttribute("role"),
+            rows: el.querySelectorAll('[role="row"],tbody tr').length,
+            gridcells: el.querySelectorAll(
+              '[role="gridcell"],[role="cell"]',
+            ).length,
+          })),
+      },
     };
     if (
       diagnostics.headers >= 2 &&
@@ -1721,6 +1860,156 @@ export async function scrollReportingRows() {
  * coordinates are accepted remotely; only a guarded Extension caller uses it.
  * The fingerprint stays opaque so diagnostics do not include customer text.
  */
+export function probeReportingPage(account: string) {
+  const u = new URL(location.href);
+  if (
+    u.protocol !== "https:" ||
+    u.port ||
+    !["adsmanager.facebook.com", "business.facebook.com"].includes(u.hostname) ||
+    !/^\/adsmanager\/manage\/(campaigns|adsets|ads)\/?$/.test(u.pathname) ||
+    u.searchParams.get("act") !== account
+  )
+    return { ready: false as const, reason: "reporting_context_changed" };
+  const visible = (el: Element) => {
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return (
+      r.width > 0 &&
+      r.height > 0 &&
+      r.top < innerHeight &&
+      r.bottom > 0 &&
+      r.left < innerWidth &&
+      r.right > 0 &&
+      s.display !== "none" &&
+      s.visibility !== "hidden"
+    );
+  };
+  const norm = (value: string | null | undefined) =>
+    (value ?? "").replace(/[\u200b-\u200d\ufeff]/g, "").replace(/\s+/g, " ").trim();
+  const pageMatch = norm(document.body.innerText).match(
+    /(\d[\d,]*)\s*[–-]\s*(\d[\d,]*)\s*(?:จาก|of)\s*(\d[\d,]*)/i,
+  );
+  const page = pageMatch
+    ? {
+        from: Number(pageMatch[1].replaceAll(",", "")),
+        to: Number(pageMatch[2].replaceAll(",", "")),
+        total: Number(pageMatch[3].replaceAll(",", "")),
+      }
+    : null;
+  const page_token = u.searchParams.get("ad_page_id");
+  const buttons = [
+    ...document.querySelectorAll<HTMLElement>(
+      'button,[role="button"],a[href]',
+    ),
+  ].filter(visible);
+  const next = buttons.find((button) => {
+    const text = norm(
+      button.getAttribute("aria-label") ??
+        button.getAttribute("title") ??
+        button.innerText,
+    );
+    if (!/^(?:ถัดไป|next|next page)$/i.test(text)) return false;
+    if (
+      button.hasAttribute("disabled") ||
+      button.getAttribute("aria-disabled") === "true"
+    )
+      return false;
+    const r = button.getBoundingClientRect();
+    const hit = document.elementFromPoint(
+      r.left + r.width / 2,
+      r.top + r.height / 2,
+    );
+    return !!hit && (button === hit || button.contains(hit) || hit.contains(button));
+  });
+  if (!next)
+    return {
+      ready: true as const,
+      page,
+      page_token,
+      next: null,
+      reason:
+        page && page.to >= page.total
+          ? "last_page"
+          : "next_page_unavailable",
+    };
+  const r = next.getBoundingClientRect();
+  return {
+    ready: true as const,
+    page,
+    page_token,
+    next: {
+      x: Math.round(r.left + r.width / 2),
+      y: Math.round(r.top + r.height / 2),
+      label: norm(next.innerText || next.getAttribute("aria-label")),
+    },
+    signature: `${page_token ?? ""}:${page ? `${page.from}:${page.to}:${page.total}` : ""}`,
+  };
+}
+
+export async function clickNextReportPage(account: string) {
+  const u = new URL(location.href);
+  if (
+    u.protocol !== "https:" ||
+    u.port ||
+    !["adsmanager.facebook.com", "business.facebook.com"].includes(u.hostname) ||
+    !/^\/adsmanager\/manage\/(campaigns|adsets|ads)\/?$/.test(u.pathname) ||
+    u.searchParams.get("act") !== account
+  )
+    return { paged: false as const, reason: "reporting_context_changed" };
+  const norm = (value: string | null | undefined) =>
+    (value ?? "").replace(/[\u200b-\u200d\ufeff]/g, "").replace(/\s+/g, " ").trim();
+  const visible = (el: Element) => {
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return (
+      r.width > 0 &&
+      r.height > 0 &&
+      r.top < innerHeight &&
+      r.bottom > 0 &&
+      r.left < innerWidth &&
+      r.right > 0 &&
+      s.display !== "none" &&
+      s.visibility !== "hidden"
+    );
+  };
+  const page = () => {
+    const match = norm(document.body.innerText).match(
+      /(\d[\d,]*)\s*[–-]\s*(\d[\d,]*)\s*(?:จาก|of)\s*(\d[\d,]*)/i,
+    );
+    return match
+      ? `${match[1]}:${match[2]}:${match[3]}:${u.searchParams.get("ad_page_id") ?? ""}`
+      : `:${u.searchParams.get("ad_page_id") ?? ""}`;
+  };
+  const next = [
+    ...document.querySelectorAll<HTMLElement>(
+      'button,[role="button"],a[href]',
+    ),
+  ].find((button) => {
+    if (!visible(button)) return false;
+    const text = norm(
+      button.getAttribute("aria-label") ??
+        button.getAttribute("title") ??
+        button.innerText,
+    );
+    return (
+      /^(?:ถัดไป|next|next page)$/i.test(text) &&
+      !button.hasAttribute("disabled") &&
+      button.getAttribute("aria-disabled") !== "true"
+    );
+  });
+  if (!next)
+    return { paged: false as const, reason: "next_page_unavailable" };
+  const before = page();
+  next.click();
+  const until = Date.now() + 8_000;
+  while (Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    if (page() !== before)
+      return { paged: true as const, method: "dom_click" as const };
+  }
+  return { paged: false as const, reason: "reporting_page_unchanged" };
+}
+
 export function probeReportingScroll(account: string) {
   const u = new URL(location.href);
   const unavailable = (reason: string) => ({ ready: false as const, reason });

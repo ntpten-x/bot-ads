@@ -158,6 +158,7 @@ try {
   await page.addInitScript(() => {
     sessionStorage.setItem("collectorToken", "fixture-only");
     localStorage.setItem("collectorAccount", "123456789");
+    localStorage.setItem("collectorAdvancedMode", "true");
   });
   await page.goto(
     (process.env.WEB_TEST_URL ?? "http://127.0.0.1:9321") +

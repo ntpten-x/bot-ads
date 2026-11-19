@@ -48,6 +48,8 @@ type ClientToken = {
   name: string;
   role: "admin" | "operator" | "viewer";
   enabled: boolean;
+  all_accounts: boolean;
+  account_ids: string[];
   created_at: string;
 };
 
@@ -97,6 +99,8 @@ export default function AccountsView({
   const [newAccountName, setNewAccountName] = useState("");
   const [clientName, setClientName] = useState("");
   const [clientRole, setClientRole] = useState("operator");
+  const [clientAllAccounts, setClientAllAccounts] = useState(false);
+  const [clientAccountIds, setClientAccountIds] = useState<string[]>([]);
   const [issuedToken, setIssuedToken] = useState("");
   const auth = useSWR<{
     kind: string;
@@ -137,6 +141,18 @@ export default function AccountsView({
           item.display_name?.toLowerCase().includes(needle)),
     );
   }, [accounts.data, query, status]);
+  const selectedCustomerAccounts = useMemo(
+    () =>
+      (accounts.data ?? []).filter(
+        (item) => item.customer_id === selectedCustomer,
+      ),
+    [accounts.data, selectedCustomer],
+  );
+  useEffect(() => {
+    if (clientAllAccounts || clientAccountIds.length) return;
+    const first = selectedCustomerAccounts[0];
+    if (first) setClientAccountIds([first.account_id]);
+  }, [clientAllAccounts, clientAccountIds.length, selectedCustomerAccounts]);
   return (
     <div className="accounts-view">
       <Note>
@@ -237,6 +253,8 @@ export default function AccountsView({
                   }>(`/customers/${selectedCustomer}/clients`, {
                     name: clientName.trim(),
                     role: clientRole,
+                    all_accounts: clientAllAccounts,
+                    account_ids: clientAllAccounts ? [] : clientAccountIds,
                   });
                   setClientName("");
                   setIssuedToken(created.token);
@@ -264,7 +282,49 @@ export default function AccountsView({
                   <option value="admin">Admin</option>
                 </select>
               </label>
-              <button className="secondary">ออก Token ใหม่</button>
+              <label className="report-check">
+                <input
+                  type="checkbox"
+                  checked={clientAllAccounts}
+                  onChange={(event) =>
+                    setClientAllAccounts(event.target.checked)
+                  }
+                />
+                เข้าถึงทุกบัญชีใน Customer นี้
+              </label>
+              {!clientAllAccounts ? (
+                <fieldset className="account-grant-list">
+                  <legend>บัญชีที่ Token นี้เข้าถึงได้</legend>
+                  {selectedCustomerAccounts.map((item) => (
+                    <label key={item.account_id}>
+                      <input
+                        type="checkbox"
+                        checked={clientAccountIds.includes(item.account_id)}
+                        onChange={(event) =>
+                          setClientAccountIds((current) =>
+                            event.target.checked
+                              ? [...new Set([...current, item.account_id])]
+                              : current.filter(
+                                  (accountId) =>
+                                    accountId !== item.account_id,
+                                ),
+                          )
+                        }
+                      />
+                      {item.display_name ?? item.account_id}
+                    </label>
+                  ))}
+                </fieldset>
+              ) : null}
+              <button
+                className="secondary"
+                disabled={
+                  !clientName.trim() ||
+                  (!clientAllAccounts && clientAccountIds.length === 0)
+                }
+              >
+                ออก Token ใหม่
+              </button>
             </form>
           </div>
           {issuedToken ? (
@@ -353,7 +413,11 @@ export default function AccountsView({
                     <span>
                       <b>{client.name}</b>
                       <small>
-                        {client.role} · ออกเมื่อ {time(client.created_at)}
+                        {client.role} ·{" "}
+                        {client.all_accounts
+                          ? "ทุกบัญชีใน Customer"
+                          : `${client.account_ids?.length ?? 0} บัญชี`}{" "}
+                        · ออกเมื่อ {time(client.created_at)}
                       </small>
                     </span>
                     <Pill kind={client.enabled ? "success" : "neutral"}>

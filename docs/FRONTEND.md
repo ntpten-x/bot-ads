@@ -41,6 +41,27 @@ npm run start:web
 
 ## เมนูที่ใช้งานได้
 
+ค่าเริ่มต้นเป็นโหมดง่ายสำหรับผู้ใช้ทั่วไป:
+
+- **เริ่มต้น:** แสดงเพียง “งานถัดไป” และความคืบหน้า 4 ขั้น
+- **ดูผลโฆษณา:** เปิด Report Studio
+- **สิ่งที่ควรทำ:** เปิดข้อเสนอและแผน
+- **บัญชีที่เชื่อมต่อ:** เพิ่มหรือตรวจบัญชีและ Extension
+- **ช่วยเหลือ:** ขั้นตอนเชื่อมต่อและตั้งค่า
+
+เครื่องมือสำหรับผู้ดูแล ได้แก่ ควบคุมหน้า Meta, นำเข้า CSV, ข้อมูลวิเคราะห์,
+ข้อมูล/ส่งออก, raw captures และประวัติคำสั่ง จะอยู่ใน **เครื่องมือขั้นสูง**
+ซึ่งเปิดและปิดได้จาก sidebar การตั้งค่าจะถูกจำใน
+`localStorage.collectorAdvancedMode`
+
+หน้าเริ่มต้นใช้รูปแบบ “งานถัดไปชัดเจน”: ระบบเลือก action ที่ควรทำเพียงรายการเดียว
+จากการเชื่อมต่อ, จำนวน Ads, ข้อเสนอใหม่ และแผนที่รออนุมัติ จากนั้นจึงแสดงทางลัด
+สำหรับงานหลักและซ่อนรายละเอียดระบบไว้ใน disclosure
+
+หน้า **ข้อมูลและส่งออก** แสดง Data Lifecycle Policy, จำนวน Ads Catalog,
+Daily retention, Raw Capture และ Monthly rollups. ปุ่ม “ตรวจแผนลบข้อมูล”
+เรียก dry-run เท่านั้น; การ apply จริงทำผ่าน CLI หลังตรวจผลและ backup
+
 - **ภาพรวม:** สถานะ Backend/Database, Extension heartbeat, จำนวน Campaign / Ad Set / Ad / observations ในฐานข้อมูล และจำนวนการนำเข้าของบัญชีที่เลือก
 - **บัญชีและสุขภาพ:** แสดง Customer, Account, Device heartbeat, coverage, normalized Ads ของงานล่าสุด, target configuration, acceptance และกำหนดการอ่านอัตโนมัติ พร้อมเปิด/ปิด Customer/บัญชี, เพิกถอน token และดู audit trail
 - **สตูดิโอรายงาน:** เลือกงานอ่าน Ads และ reporting scope เพื่อดูกราฟแท่ง ตาราง สถานะการนำส่ง และ coverage โดยไม่ให้ระบบตัดสินแทนผู้ใช้
@@ -121,6 +142,7 @@ Device status เก่ากว่า 90 วินาทีจะแสดง�
 API_TOKEN ใน `.env` เป็น local admin และสามารถจัดการ Customer, Account mapping และ API client token ได้จากหน้า **บัญชีและสุขภาพ**
 
 - Client token แสดงเพียงครั้งเดียวและเก็บเฉพาะ SHA-256 hash ใน PostgreSQL
+- Token ใหม่เลือก Account-level access ได้: ทุกบัญชีใน Customer หรือเฉพาะ account_ids ที่กำหนด; token เดิมคง all_accounts=true เพื่อ compatibility
 - `operator` ใช้งาน account ที่ผูกกับ Customer ของตนได้
 - `admin` ของ Customer เห็นและจัดการได้เฉพาะ Customer ของตน; Customer management ทั้งระบบยังใช้ local `API_TOKEN` เท่านั้น
 - `viewer` เปิดอ่านรายงานได้แต่คำสั่ง POST ทุกชนิดถูกปฏิเสธ
@@ -131,6 +153,9 @@ API_TOKEN ใน `.env` เป็น local admin และสามารถจ�
 - การเพิกถอน token มีผลกับ request ถัดไปทันที; การปิด Customer/บัญชีปิด schedule ที่เกี่ยวข้องด้วยและบันทึกใน audit trail
 
 Extension หนึ่ง Device ผูกได้ครั้งละหนึ่งบัญชี หากต้องเก็บหลายบัญชีพร้อมกันให้ใช้ Chrome Profile/Device แยกกัน
+
+`npm run check:accounts-load` เป็น read-only load smoke สำหรับ Summary,
+Optimization Workspace และ paginated Export โดยไม่แตะ Meta จริง
 
 ## ทดสอบ
 
@@ -170,5 +195,9 @@ report scope ที่ coverage complete เท่านั้นสำหรั
 - Creative Memory เก็บ copy metadata; Campaign Template เก็บโครง Draft
 - Outcome Observation เทียบ Target Ads กับ Capture ล่าสุดและบันทึก delta
 - `automated_meta_mutation=false` จนกว่าจะมี adapter ที่ผ่าน live readback
+
+ในโหมดง่าย หน้า Optimization จะซ่อน Policy, Experiment, Creative metadata และ
+Campaign template ไว้หลัง **เครื่องมือขั้นสูง** โดยยังแสดงข้อมูลล่าสุดและ
+รายการ “สิ่งที่ควรทำตอนนี้” ตามปกติ
 
 รายละเอียด contract และข้อจำกัดอยู่ที่ [OPTIMIZATION.md](OPTIMIZATION.md).

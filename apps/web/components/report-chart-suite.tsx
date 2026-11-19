@@ -77,7 +77,7 @@ export function KpiRibbon({
 }) {
   const items = [
     {
-      label: "Ads ในมุมมอง",
+      label: "Ads ที่ประเมิน",
       value: number(ads),
       note: `${number(verified)} ยืนยัน ID · ${number(observed)} observed`,
       compact: false,

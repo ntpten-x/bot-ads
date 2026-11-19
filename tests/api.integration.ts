@@ -85,7 +85,17 @@ assert.equal(
   (await (await req(`/devices/${device}/commands/next`)).json()).id,
   command.id,
 );
-await req(`/devices/${device}/commands/${command.id}/result`, { ok: true });
+const collectionJobId = randomUUID();
+await req(`/devices/${device}/commands/${command.id}/result`, {
+  ok: true,
+  job: { id: collectionJobId, status: "running" },
+  collection: {
+    phase: "collection_started",
+    active: true,
+    job_id: collectionJobId,
+    job_status: "running",
+  },
+});
 assert.equal(
   (await (await req(`/devices/${device}/commands/${command.id}`)).json())
     .status,
@@ -103,3 +113,6 @@ const detail = await (
   await req(`/devices/${device}/commands/${command.id}`)
 ).json();
 assert.equal(detail.command.command, "start");
+assert.equal(detail.result.collection.active, true);
+assert.equal(detail.result.collection.job_id, collectionJobId);
+assert.equal(detail.result.job.status, "running");

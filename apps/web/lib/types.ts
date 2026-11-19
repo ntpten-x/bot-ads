@@ -1,5 +1,8 @@
 import type { z } from "zod";
-import type { botCommandSchema } from "../../../packages/core/src/control";
+import type {
+  botCommandSchema,
+  CommandResult,
+} from "../../../packages/core/src/control";
 import type {
   AdRecord,
   ImportInput,
@@ -95,7 +98,7 @@ export type CommandRow = {
   approval_id?: string;
 };
 export type Receipt = CommandRow & {
-  result?: { ok: boolean; error?: string; job?: Job; ui?: UiResult };
+  result?: CommandResult & { job?: Job; ui?: UiResult };
 };
 export type ImportRow = {
   id: string;

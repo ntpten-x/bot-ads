@@ -18,6 +18,7 @@ import {
   buildDeliverySummary,
   buildHistogram,
   buildKpis,
+  buildPerformanceRows,
   buildReportRows,
   buildScatter,
   buildScopeBars,
@@ -125,6 +126,7 @@ export default function ReportStudioView({
   device,
   send,
   fresh,
+  advanced,
   onOpenCaptureSetup,
   onOpenOptimization,
   onImport,
@@ -138,6 +140,7 @@ export default function ReportStudioView({
   device: string;
   send: (command: unknown) => Promise<string>;
   fresh: boolean;
+  advanced: boolean;
   onOpenCaptureSetup: () => void;
   onOpenOptimization: () => void;
   onImport: () => void;
@@ -225,8 +228,10 @@ export default function ReportStudioView({
     },
   );
   const workflowReceiptData = workflowReceipt.data;
+  const collectionReceipt = workflowReceiptData?.result?.collection;
   const captureActive =
     workflowReceiptData?.status === "pending" ||
+    collectionReceipt?.active === true ||
     deviceState?.state.job?.status === "running";
   const analysis = useSWR<Response>(
     account ? `/captures/analysis?${params.toString()}` : null,
@@ -326,23 +331,36 @@ export default function ReportStudioView({
       includeObserved,
     ],
   );
-  const chart = useMemo(() => buildChartRows(rows), [rows]);
+  const performanceRows = useMemo(
+    () => buildPerformanceRows(rows),
+    [rows],
+  );
+  const chart = useMemo(
+    () => buildChartRows(performanceRows),
+    [performanceRows],
+  );
   const scopeBars = useMemo(
     () => buildScopeBars(adsLevels, metric),
     [adsLevels, metric],
   );
   const outcomes = useMemo(() => buildDeliverySummary(rows), [rows]);
-  const kpis = useMemo(() => buildKpis(rows), [rows]);
+  const kpis = useMemo(() => buildKpis(performanceRows), [performanceRows]);
   const composition = useMemo(
-    () => buildComposition(rows, compositionBasis),
-    [rows, compositionBasis],
+    () => buildComposition(performanceRows, compositionBasis),
+    [performanceRows, compositionBasis],
   );
-  const histogram = useMemo(() => buildHistogram(rows, metric), [rows, metric]);
+  const histogram = useMemo(
+    () => buildHistogram(performanceRows, metric),
+    [performanceRows, metric],
+  );
   const scatter = useMemo(
-    () => buildScatter(rows, scatterX, scatterY),
-    [rows, scatterX, scatterY],
+    () => buildScatter(performanceRows, scatterX, scatterY),
+    [performanceRows, scatterX, scatterY],
   );
-  const concentration = useMemo(() => buildConcentration(rows), [rows]);
+  const concentration = useMemo(
+    () => buildConcentration(performanceRows),
+    [performanceRows],
+  );
   const resultTypes = useMemo(
     () => uniqueValues(scope, "result_type"),
     [scope],
@@ -612,7 +630,7 @@ export default function ReportStudioView({
       <section className="report-command" aria-label="เลือกชุดรายงาน">
         <div className="report-command-main">
           <div>
-            <label htmlFor="reportJob">ชุดข้อมูลที่อ่านจาก Ads Manager</label>
+            <label htmlFor="reportJob">ชุดข้อมูลที่อ่านล่าสุด</label>
             <select
               id="reportJob"
               value={selectedJob}
@@ -630,7 +648,7 @@ export default function ReportStudioView({
             </select>
           </div>
           <div>
-            <label htmlFor="reportScope">Scope ที่ต้องการดู</label>
+            <label htmlFor="reportScope">ช่วงเวลาและกลุ่มที่ต้องการดู</label>
             <select
               id="reportScope"
               value={scope?.scope_key ?? ""}
@@ -664,14 +682,16 @@ export default function ReportStudioView({
           </div>
         </div>
         <div className="report-command-actions">
-          <button
-            className="secondary"
-            onClick={onOpenCaptureSetup}
-            disabled={!account}
-          >
-            <Icon name="scan" />
-            ตั้งค่าคอลัมน์ / เปิดหน้า Ads
-          </button>
+          {advanced ? (
+            <button
+              className="secondary"
+              onClick={onOpenCaptureSetup}
+              disabled={!account}
+            >
+              <Icon name="scan" />
+              ตั้งค่าคอลัมน์ / เปิดหน้า Ads
+            </button>
+          ) : null}
           <button
             className="secondary"
             onClick={onOpenOptimization}
@@ -698,7 +718,7 @@ export default function ReportStudioView({
               disabled={!account}
             >
               {deviceState?.state.extension_version && !supportsReportWorkflow
-                ? "Reload Extension 0.6.47"
+                ? "Reload Extension 0.6.48"
                 : "เปิดสิทธิ์รายงานใน Extension"}
             </button>
           )}
@@ -719,6 +739,8 @@ export default function ReportStudioView({
                 ? "Extension กำลังเปิดหน้า Ads และตั้งคอลัมน์"
                 : workflowReceiptData?.status === "error"
                   ? "ดึงข้อมูลไม่สำเร็จ"
+                  : collectionReceipt?.active
+                    ? "เริ่ม Collection แล้ว Extension กำลังอ่านตาราง"
                   : deviceState?.state.job?.status === "running"
                     ? "กำลังอ่านและบันทึก snapshots"
                     : "คำสั่งรายงานจบแล้ว"}
@@ -734,7 +756,7 @@ export default function ReportStudioView({
             </li>
             <li
               className={
-                deviceState?.state.job?.status === "running"
+                captureActive
                   ? "active"
                   : workflowReceiptData?.status === "done"
                     ? "done"
@@ -755,6 +777,13 @@ export default function ReportStudioView({
           </ol>
           {workflowReceiptData?.error ? (
             <p>{workflowReceiptData.error}</p>
+          ) : null}
+          {collectionReceipt ? (
+            <p>
+              Command: {workflowReceiptData?.status ?? "unknown"} · Collection:{" "}
+              {collectionReceipt.job_status ?? "unknown"} ·{" "}
+              {collectionReceipt.active ? "กำลังทำงาน" : "ไม่ทำงานแล้ว"}
+            </p>
           ) : null}
         </section>
       ) : null}
@@ -787,7 +816,7 @@ export default function ReportStudioView({
             <div className="report-identity-lead">
               <span>{scope.context.date_range_label ?? "ไม่ทราบช่วงวันที่"}</span>
               <strong>
-                {scope.verified_unique_rows} Ads ที่ยืนยัน ID
+                {scope.verified_unique_rows} Ads ที่อ่านได้
                 {scope.unresolved_observations
                   ? ` · ${scope.unresolved_observations} observation รอเชื่อมตัวตน`
                   : ""}
@@ -801,25 +830,30 @@ export default function ReportStudioView({
               </small>
             </div>
             <div className="report-identity-fact">
-              <span>Coverage</span>
+              <span>ความครบของข้อมูล</span>
               <Pill kind={coverageKinds[scope.coverage]}>
                 {coverageLabels[scope.coverage]}
               </Pill>
             </div>
-            <div className="report-identity-fact">
-              <span>Breakdown</span>
-              <strong>{breakdownText(scope)}</strong>
-            </div>
-            <div className="report-identity-fact">
-              <span>บริบทการวัด</span>
-              <strong>
-                {scope.context.currency ?? "สกุลเงินยังไม่ยืนยัน"} ·{" "}
-                {scope.context.attribution ?? "Attribution ยังไม่ยืนยัน"}
-              </strong>
-            </div>
+            {advanced ? (
+              <>
+                <div className="report-identity-fact">
+                  <span>Breakdown</span>
+                  <strong>{breakdownText(scope)}</strong>
+                </div>
+                <div className="report-identity-fact">
+                  <span>บริบทการวัด</span>
+                  <strong>
+                    {scope.context.currency ?? "สกุลเงินยังไม่ยืนยัน"} ·{" "}
+                    {scope.context.attribution ?? "Attribution ยังไม่ยืนยัน"}
+                  </strong>
+                </div>
+              </>
+            ) : null}
           </section>
 
-          <section className="report-acceptance" aria-label="ความพร้อมของรายงาน">
+          {advanced ? (
+            <section className="report-acceptance" aria-label="ความพร้อมของรายงาน">
             <div className="report-acceptance-head">
               <div>
                 <span>รายการตรวจความพร้อม</span>
@@ -842,9 +876,10 @@ export default function ReportStudioView({
                 </li>
               ))}
             </ul>
-          </section>
+            </section>
+          ) : null}
 
-          {materialization.data ? (
+          {advanced && materialization.data ? (
             <section
               className="report-data-health"
               aria-label="สถานะข้อมูล normalized"
@@ -1438,6 +1473,11 @@ export default function ReportStudioView({
                     </div>
                   ))}
                 </dl>
+                <p className="report-side-note">
+                  ปิดใช้งาน ระดับบนปิดอยู่ และข้อผิดพลาดการชำระเงิน
+                  แสดงเพื่อวินิจฉัยสถานะเท่านั้น ไม่ถูกใช้เป็นปัจจัยในการจัดอันดับ
+                  ค่ากลาง หรือคำแนะนำประสิทธิภาพ
+                </p>
               </section>
 
               {scopeBars.rows.length > 1 ? (

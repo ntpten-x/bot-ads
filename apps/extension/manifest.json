@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Meta Ads Data Collector",
-  "version": "0.6.47",
+  "version": "0.6.70",
   "description": "Collect reports and control Meta Business Suite through visible web UI. No Meta API integration.",
   "permissions": ["activeTab", "scripting", "storage", "alarms", "debugger"],
   "optional_host_permissions": [

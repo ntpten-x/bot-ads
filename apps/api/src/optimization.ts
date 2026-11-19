@@ -6,6 +6,7 @@ import type {
   AnalyzedRow,
   LevelAnalysis,
 } from "../../../packages/core/src/capture-analysis.js";
+import { captureAnalysisVersion } from "../../../packages/core/src/capture-analysis.js";
 import {
   buildOptimizationRecommendations,
   defaultOptimizationPolicy,
@@ -14,6 +15,7 @@ import {
   type OptimizationRecommendationDraft,
 } from "../../../packages/core/src/optimization.js";
 import { assertManagedAccountEnabled } from "./accounts.js";
+import { refreshStaleReportCaches } from "./report-cache.js";
 
 type StoredAnalysis = { levels?: LevelAnalysis[] };
 
@@ -34,42 +36,66 @@ async function loadReportScope(
   requestedJob?: string,
   requestedScope?: string,
 ) {
-  const job = requestedJob
-    ? (
-        await pool.query(
-          `SELECT id,status,first_seen_at,updated_at,extension_version
-           FROM capture_jobs WHERE id=$1 AND account_id=$2`,
-          [requestedJob, account],
-        )
-      ).rows[0]
-    : (
-        await pool.query(
-          `SELECT j.id,j.status,j.first_seen_at,j.updated_at,j.extension_version
-           FROM capture_jobs j
-           WHERE j.account_id=$1
-             AND EXISTS(SELECT 1 FROM capture_job_reports r WHERE r.job_id=j.id)
-           ORDER BY j.updated_at DESC
-           LIMIT 1`,
-          [account],
-        )
-      ).rows[0];
-  if (!job) return null;
+  await refreshStaleReportCaches(pool, account, requestedJob);
   const reports = await pool.query(
-    `SELECT analysis,updated_at FROM capture_job_reports
-     WHERE job_id=$1 ORDER BY updated_at DESC`,
-    [job.id],
+    `SELECT j.id,j.status,j.first_seen_at,j.updated_at,j.extension_version,
+            r.analysis,r.updated_at AS report_updated_at
+     FROM capture_jobs j
+     JOIN capture_job_reports r ON r.job_id=j.id
+     WHERE j.account_id=$1
+       AND r.analyzer_version=$2
+       AND ($3::uuid IS NULL OR j.id=$3)
+     ORDER BY j.updated_at DESC,r.updated_at DESC`,
+    [account, captureAnalysisVersion, requestedJob ?? null],
   );
-  const levels = reports.rows
-    .flatMap((row) => (row.analysis as StoredAnalysis)?.levels ?? [])
-    .filter(
-      (level) =>
-        level.level === "ads" &&
-        (!requestedScope || level.scope_key === requestedScope),
-    )
-    .sort((left, right) => coverageRank(right) - coverageRank(left));
-  const level = levels[0];
-  if (!level) return null;
-  return { job, level };
+  const jobs = new Map<
+    string,
+    {
+      job: {
+        id: string;
+        status: string;
+        first_seen_at: string;
+        updated_at: string;
+        extension_version: string | null;
+      };
+      levels: LevelAnalysis[];
+    }
+  >();
+  for (const report of reports.rows) {
+    const entry: {
+      job: {
+        id: string;
+        status: string;
+        first_seen_at: string;
+        updated_at: string;
+        extension_version: string | null;
+      };
+      levels: LevelAnalysis[];
+    } = jobs.get(report.id) ?? {
+      job: {
+        id: report.id,
+        status: report.status,
+        first_seen_at: report.first_seen_at,
+        updated_at: report.updated_at,
+        extension_version: report.extension_version,
+      },
+      levels: [],
+    };
+    entry.levels.push(
+      ...((report.analysis as StoredAnalysis)?.levels ?? []).filter(
+        (level) =>
+          level.level === "ads" &&
+          (!requestedScope || level.scope_key === requestedScope),
+      ),
+    );
+    jobs.set(report.id, entry);
+  }
+  for (const { job, levels } of jobs.values()) {
+    levels.sort((left, right) => coverageRank(right) - coverageRank(left));
+    if (!levels.length) continue;
+    return { job, level: levels[0] };
+  }
+  return null;
 }
 
 function fingerprint(value: unknown) {
@@ -1260,19 +1286,20 @@ export function optimizationRoutes(pool: Pool) {
     const account = accountSchema.parse(req.query.account_id);
     await assertManagedAccountEnabled(pool, account);
     let scope = null;
+    let selected: Awaited<ReturnType<typeof loadReportScope>> = null;
     try {
-      const latest = await loadReportScope(pool, account);
-      if (latest)
+      selected = await loadReportScope(pool, account);
+      if (selected)
         scope = {
-          job_id: latest.job.id,
-          job_status: latest.job.status,
-          captured_at: latest.job.updated_at,
-          scope_key: latest.level.scope_key,
-          coverage: latest.level.coverage,
-          blockers: latest.level.blockers,
-          verified_ads: latest.level.verified_unique_rows,
-          reported_ads: latest.level.reported_total_rows,
-          context: latest.level.context,
+          job_id: selected.job.id,
+          job_status: selected.job.status,
+          captured_at: selected.job.updated_at,
+          scope_key: selected.level.scope_key,
+          coverage: selected.level.coverage,
+          blockers: selected.level.blockers,
+          verified_ads: selected.level.verified_unique_rows,
+          reported_ads: selected.level.reported_total_rows,
+          context: selected.level.context,
         };
     } catch {
       scope = null;
@@ -1364,12 +1391,33 @@ export function optimizationRoutes(pool: Pool) {
     const parsedPolicy = optimizationPolicySchema.safeParse(
       policy.rows[0]?.data,
     );
+    const effectivePolicy = parsedPolicy.success
+      ? parsedPolicy.data
+      : defaultOptimizationPolicy;
+    const currentEvaluation = selected
+      ? buildOptimizationRecommendations(selected.level, effectivePolicy)
+      : null;
+    const currentSourceKeys = new Set(
+      currentEvaluation?.recommendations.map(
+        (recommendation) =>
+          `${selected!.level.scope_key}:${recommendation.source_key}`,
+      ) ?? [],
+    );
+    const currentRecommendations =
+      selected && currentEvaluation
+        ? recommendations.rows.filter(
+            (recommendation) =>
+              recommendation.job_id === selected!.job.id &&
+              recommendation.scope_key === selected!.level.scope_key &&
+              currentSourceKeys.has(recommendation.source_key),
+          )
+        : [];
     res.json({
       account_id: account,
       scope,
-      policy: parsedPolicy.success ? parsedPolicy.data : defaultOptimizationPolicy,
+      policy: effectivePolicy,
       policy_updated_at: policy.rows[0]?.updated_at ?? null,
-      recommendations: recommendations.rows,
+      recommendations: currentRecommendations,
       plans: plans.rows,
       experiments: experiments.rows,
       creatives: creatives.rows,

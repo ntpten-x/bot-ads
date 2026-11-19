@@ -14,7 +14,10 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { importSchema, parseReport } from "../../../packages/core/src/index.js";
-import { botCommandSchema } from "../../../packages/core/src/control.js";
+import {
+  botCommandSchema,
+  commandResultSchema,
+} from "../../../packages/core/src/control.js";
 import {
   defaultReportPreferences,
   reportPreferencesSchema,
@@ -22,6 +25,7 @@ import {
 import { pool, saveImport } from "./store.js";
 import { captureRoutes, persistJob } from "./captures.js";
 import { optimizationRoutes } from "./optimization.js";
+import { dataLifecycleRoutes } from "./data-lifecycle.js";
 const token = process.env.API_TOKEN;
 if (!token || token.length < 32)
   throw new Error("API_TOKEN must be at least 32 characters");
@@ -43,7 +47,8 @@ app.use(async (req, res, next) => {
     const raw = authorization.replace(/^Bearer\s+/i, "");
     const hash = createHash("sha256").update(raw).digest("hex");
     const client = await pool.query(
-      `SELECT api.id,api.customer_id,api.role,c.name AS customer_name
+      `SELECT api.id,api.customer_id,api.role,api.all_accounts,
+              c.name AS customer_name
        FROM api_clients api
        JOIN customers c ON c.id=api.customer_id
        WHERE api.token_hash=$1 AND api.enabled=true AND c.enabled=true`,
@@ -63,19 +68,32 @@ app.use(async (req, res, next) => {
       id: null,
       customer_id: null,
       role: "admin",
+      all_accounts: true,
       customer_name: null,
     };
   }
   next();
 });
 app.use(express.json({ limit: "12mb" }));
-app.get("/auth/me", (req, res) => {
+app.get("/auth/me", async (req, res) => {
   const auth = (req as any).auth;
+  const accessibleAccounts =
+    auth.kind === "client" && !auth.all_accounts
+      ? (
+          await pool.query(
+            `SELECT account_id FROM api_client_accounts
+             WHERE client_id=$1 ORDER BY account_id`,
+            [auth.id],
+          )
+        ).rows.map((row) => row.account_id)
+      : null;
   res.json({
     kind: auth.kind,
     role: auth.role,
     customer_id: auth.customer_id ?? null,
     customer_name: auth.customer_name ?? null,
+    all_accounts: auth.all_accounts === true,
+    accounts: accessibleAccounts,
   });
 });
 app.use(async (req, res, next) => {
@@ -83,6 +101,8 @@ app.use(async (req, res, next) => {
     kind: string;
     customer_id: string | null;
     role: string;
+    id: string | null;
+    all_accounts: boolean;
   };
   if (auth.kind === "local-admin") {
     next();
@@ -124,10 +144,19 @@ app.use(async (req, res, next) => {
     add(snapshot.rows[0]?.account_id);
   }
   for (const account of accounts) {
-    const ownership = await pool.query(
-      "SELECT enabled FROM managed_accounts WHERE account_id=$1 AND customer_id=$2",
-      [account, auth.customer_id],
-    );
+    const ownership = auth.all_accounts
+      ? await pool.query(
+          "SELECT enabled FROM managed_accounts WHERE account_id=$1 AND customer_id=$2",
+          [account, auth.customer_id],
+        )
+      : await pool.query(
+          `SELECT ma.enabled
+           FROM managed_accounts ma
+           JOIN api_client_accounts access
+             ON access.account_id=ma.account_id AND access.client_id=$3
+           WHERE ma.account_id=$1 AND ma.customer_id=$2`,
+          [account, auth.customer_id, auth.id],
+        );
     if (!ownership.rowCount) {
       res.status(403).json({ error: "Account is outside this customer" });
       return;
@@ -146,6 +175,7 @@ app.use(dashboardRoutes(pool));
 app.use(accountManagementRoutes(pool));
 app.use(captureRoutes(pool));
 app.use(optimizationRoutes(pool));
+app.use(dataLifecycleRoutes(pool));
 app.get("/health", async (_req, res) => {
   await pool.query("SELECT 1");
   res.json({ status: "ready" });
@@ -454,14 +484,7 @@ app.get("/devices/:device/commands/next", async (req, res) => {
 app.post("/devices/:device/commands/:id/result", async (req, res) => {
   const device = z.uuid().parse(req.params.device);
   const id = z.uuid().parse(req.params.id);
-  const result = z
-    .object({
-      ok: z.boolean(),
-      error: z.string().optional(),
-      job: z.unknown().optional(),
-      ui: z.unknown().optional(),
-    })
-    .parse(req.body);
+  const result = commandResultSchema.parse(req.body);
   const r = await pool.query(
     "UPDATE bot_commands SET status=$3,result=$4,completed_at=now() WHERE id=$1 AND device_id=$2 AND status='pending' RETURNING id",
     [id, device, result.ok ? "done" : "error", JSON.stringify(result)],

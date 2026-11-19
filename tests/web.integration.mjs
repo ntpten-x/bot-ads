@@ -81,6 +81,7 @@ try {
   await page.addInitScript(() => {
     localStorage.setItem("collectorAccount", "123456789");
     localStorage.removeItem("collectorDevice");
+    localStorage.setItem("collectorAdvancedMode", "true");
   });
   await page.goto(`${base}/?account=${account}`);
   await expect(
@@ -96,19 +97,19 @@ try {
   await expect(
     page.getByRole("heading", { name: "ภาพรวมการทำงาน" }),
   ).toBeVisible();
-  await expect(page.getByLabel("บัญชีโฆษณา", { exact: true })).toHaveValue(
+  await expect(page.getByLabel("บัญชีที่กำลังดู", { exact: true })).toHaveValue(
     account,
   );
   await expect(
-    page.getByLabel("Chrome Extension", { exact: true }),
+    page.getByLabel("อุปกรณ์ที่เชื่อมต่อ", { exact: true }),
   ).toHaveValue(device);
-  await page.getByLabel("บัญชีโฆษณา", { exact: true }).fill(account);
+  await page.getByLabel("บัญชีที่กำลังดู", { exact: true }).fill(account);
   await page
     .locator(".context-bar")
     .getByRole("button", { name: "เลือก", exact: true })
     .click();
   await page
-    .getByLabel("Chrome Extension", { exact: true })
+    .getByLabel("อุปกรณ์ที่เชื่อมต่อ", { exact: true })
     .selectOption(device);
   await expect(page.locator(".context-state")).toContainText("เชื่อมต่อแล้ว");
   await mkdir("docs/screenshots", { recursive: true });
@@ -410,7 +411,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page
     .locator("nav")
-    .getByRole("button", { name: "ภาพรวม", exact: true })
+    .getByRole("button", { name: "เริ่มต้น", exact: true })
     .click();
   await page.screenshot({
     path: "docs/screenshots/frontend-mobile.png",

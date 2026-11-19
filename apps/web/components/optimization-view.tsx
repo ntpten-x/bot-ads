@@ -177,6 +177,12 @@ const statusLabels: Record<string, string> = {
   ready_for_local_review: "รอ Local Approval",
 };
 
+const riskLabels: Record<Recommendation["risk"], string> = {
+  low: "ต่ำ",
+  medium: "ควรตรวจสอบ",
+  high: "ต้องอนุมัติเป็นพิเศษ",
+};
+
 function metric(value: unknown, currency = "THB") {
   return typeof value === "number"
     ? new Intl.NumberFormat("th-TH", {
@@ -197,12 +203,14 @@ export default function OptimizationView({
   api,
   run,
   busy,
+  advanced,
   onOpenControl,
 }: {
   account: string;
   api: Api;
   run: Run;
   busy: boolean;
+  advanced: boolean;
   onOpenControl: () => void;
 }) {
   const key = account
@@ -354,12 +362,14 @@ export default function OptimizationView({
     });
 
   return (
-    <div className="optimization-view">
+    <div
+      className={`optimization-view ${advanced ? "advanced-mode" : "simple-mode"}`}
+    >
       <section className="optimization-flow" aria-label="วงจรปรับปรุงโฆษณา">
         <div className="optimization-flow-head">
           <div>
-            <span>Optimization loop</span>
-            <strong>จากหลักฐานสู่นวัตกรรมที่วัดผลได้</strong>
+            <span>ขั้นตอนทำงาน</span>
+            <strong>ตรวจข้อมูล → ดูสิ่งที่ควรทำ → อนุมัติ → วัดผล</strong>
           </div>
           <Pill
             kind={current?.scope?.coverage === "complete" ? "success" : "warning"}
@@ -393,10 +403,14 @@ export default function OptimizationView({
             </strong>
           </div>
           <div>
-            <span>Attribution</span>
-            <strong>{current?.scope?.context.attribution ?? "ยังไม่ยืนยัน"}</strong>
+            <span>ความพร้อม</span>
+            <strong>
+              {current?.scope?.coverage === "complete"
+                ? "พร้อมวิเคราะห์"
+                : "ข้อมูลยังไม่ครบ"}
+            </strong>
           </div>
-          <div>
+          <div className="optimization-technical">
             <span>History versions</span>
             <strong>{number(current?.hierarchy_versions.ad ?? 0)}</strong>
           </div>
@@ -405,7 +419,7 @@ export default function OptimizationView({
             disabled={busy || !account}
             onClick={() => void rebuild()}
           >
-            สร้างข้อเสนอจาก Capture ล่าสุด
+            สร้างข้อเสนอใหม่
           </button>
         </div>
         {lastRebuild ? <p role="status">{lastRebuild}</p> : null}
@@ -414,11 +428,11 @@ export default function OptimizationView({
       <div className="optimization-layout">
         <div className="optimization-main">
           <Panel
-            title="Decision ledger"
-            subtitle="ทุกข้อเสนอผูกกับ Ads ID, ต้นทุน, กลุ่มเทียบ และความมั่นใจ"
+            title="สิ่งที่ควรทำตอนนี้"
+            subtitle="เรียงจากเรื่องที่ควรตรวจ ทดลอง หรือปรับปรุงก่อน"
             action={
               <span className="ledger-count">
-                {activeRecommendations.length} รอตัดสินใจ
+                {activeRecommendations.length} รายการรอพิจารณา
               </span>
             }
           >
@@ -479,7 +493,7 @@ export default function OptimizationView({
                       >
                         {confidenceLabel(item.confidence)} confidence
                       </Pill>
-                      <small>ความเสี่ยง {item.risk}</small>
+                      <small>ความเสี่ยง {riskLabels[item.risk]}</small>
                       <small>{statusLabels[item.status] ?? item.status}</small>
                       {item.status === "suggested" ? (
                         <div className="button-group">
@@ -488,7 +502,7 @@ export default function OptimizationView({
                             disabled={busy}
                             onClick={() => void createPlan(item)}
                           >
-                            สร้างแผน
+                            สร้างแผนดำเนินการ
                           </button>
                           <button
                             className="text-button"
@@ -512,6 +526,7 @@ export default function OptimizationView({
           </Panel>
 
           <Panel
+            className="optimization-technical"
             title="Experiment register"
             subtitle="กำหนดสมมติฐานและกลุ่มเทียบก่อนนำผู้ชนะไปสร้าง Campaign ใหม่"
           >
@@ -625,6 +640,7 @@ export default function OptimizationView({
 
           <div className="optimization-memory-grid">
             <Panel
+              className="optimization-technical"
               title="Creative memory"
               subtitle="เก็บข้อความและ Creative metadata เพื่อเชื่อมผู้ชนะกับรูปแบบที่ใช้ได้"
             >
@@ -705,6 +721,7 @@ export default function OptimizationView({
             </Panel>
 
             <Panel
+              className="optimization-technical"
               title="Campaign templates"
               subtitle="โครงตั้งต้นสำหรับ Clone & mutate; ยังไม่ publish จากหน้านี้"
             >
@@ -781,6 +798,7 @@ export default function OptimizationView({
 
         <aside className="optimization-rail">
           <Panel
+            className="optimization-technical"
             title="Policy & guardrails"
             subtitle="เกณฑ์บังคับก่อนสร้างข้อเสนอ"
           >

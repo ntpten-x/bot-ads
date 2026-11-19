@@ -63,6 +63,33 @@ try {
   expect(columns.unstructured.viewport_text).not.toContain(
     "All ads navigation",
   );
+  const clippedHeaders = await read(
+    `<div id="report" style="position:relative;width:500px;height:180px">
+      <div style="display:flex;height:8px;overflow:hidden">
+        <div role="columnheader" style="width:180px;height:40px">Ad</div>
+        <div role="columnheader" style="width:180px;height:40px">Amount spent</div>
+      </div>
+      <div role="switch" style="position:absolute;left:10px;top:60px;width:40px;height:24px"></div>
+      <div style="position:absolute;left:110px;top:60px">Visible Ad A</div>
+      <div style="position:absolute;left:300px;top:60px">100</div>
+    </div>`,
+    "/adsmanager/manage/ads",
+  );
+  expect(clippedHeaders.tables).toEqual([]);
+  expect(clippedHeaders.unstructured.headers).toEqual(["Ad", "Amount spent"]);
+  expect(clippedHeaders.unstructured.viewport_text).toContain("Visible Ad A");
+  const splitPortals = await read(
+    `<div><div role="columnheader">Ad</div></div>
+     <div><div role="columnheader">Amount spent</div></div>
+     <div style="position:relative;height:100px">
+       <div role="switch" style="position:absolute;left:10px;top:10px;width:40px;height:24px"></div>
+       <div style="position:absolute;left:100px;top:10px">Portal Ad A</div>
+       <div style="position:absolute;left:300px;top:10px">100</div>
+     </div>`,
+    "/adsmanager/manage/ads",
+  );
+  expect(splitPortals.unstructured.headers).toEqual(["Ad", "Amount spent"]);
+  expect(splitPortals.unstructured.viewport_text).toContain("Portal Ad A");
   const unloaded = await read(
     '<div class="workspace"><nav><a href="#nav">All ads navigation</a></nav><div class="report"><div role="columnheader">Campaign</div><div role="columnheader">Spend</div><div>Loading rows</div></div></div>',
   );

@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { Pool, PoolClient } from "pg";
 import { z } from "zod";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { captureAnalysisVersion } from "../../../packages/core/src/capture-analysis.js";
 
 const LOCAL_CUSTOMER = "77a6dc50-d619-4d05-bc19-4d515e30db5b";
 const SCHEDULE_RETRY_MINUTES = 10;
@@ -11,6 +12,7 @@ type AuthContext = {
   id: string | null;
   customer_id: string | null;
   role: "admin" | "operator" | "viewer";
+  all_accounts?: boolean;
 };
 
 async function writeAudit(
@@ -367,6 +369,8 @@ export function accountManagementRoutes(pool: Pool) {
   router.get("/managed-accounts", async (req, res) => {
     const auth = (req as any).auth as AuthContext;
     const customerId = auth.customer_id;
+    const allAccounts =
+      auth.kind === "local-admin" || auth.all_accounts === true;
     if (auth.kind === "local-admin")
       await pool.query(
         `INSERT INTO managed_accounts(account_id,customer_id)
@@ -416,6 +420,7 @@ export function accountManagementRoutes(pool: Pool) {
                 (
                   SELECT r.analysis FROM capture_job_reports r
                   WHERE r.job_id=j.id
+                    AND r.analyzer_version=$4
                   ORDER BY (
                     SELECT count(*) FROM jsonb_array_elements(
                       COALESCE(r.analysis->'levels','[]'::jsonb)
@@ -442,6 +447,13 @@ export function accountManagementRoutes(pool: Pool) {
        ) j ON true
        WHERE ($1::uuid IS NULL OR ma.customer_id=$1)
          AND (
+           $2::boolean
+           OR EXISTS(
+             SELECT 1 FROM api_client_accounts access
+             WHERE access.client_id=$3 AND access.account_id=ma.account_id
+           )
+         )
+         AND (
            $1::uuid IS NOT NULL
            OR ma.display_name IS NOT NULL
            OR ma.report_template<>'{}'::jsonb
@@ -459,7 +471,7 @@ export function accountManagementRoutes(pool: Pool) {
            )
          )
        ORDER BY c.name,ma.display_name NULLS LAST,ma.account_id`,
-      [customerId],
+      [customerId, allAccounts, auth.id, captureAnalysisVersion],
     );
     res.json(
       result.rows.map((row) => {
@@ -509,17 +521,28 @@ export function accountManagementRoutes(pool: Pool) {
     const result = await pool.query(
       allCustomers
         ? `SELECT c.id,c.name,c.enabled,c.created_at,
-                  count(ma.account_id)::int AS account_count
-           FROM customers c
-           LEFT JOIN managed_accounts ma ON ma.customer_id=c.id
-           GROUP BY c.id ORDER BY c.name`
-        : `SELECT c.id,c.name,c.enabled,c.created_at,
-                  count(ma.account_id)::int AS account_count
-           FROM customers c
-           LEFT JOIN managed_accounts ma ON ma.customer_id=c.id
-           WHERE c.id=$1
-           GROUP BY c.id`,
-      allCustomers ? [] : [auth.customer_id],
+                  (SELECT count(*) FROM managed_accounts ma
+                   WHERE ma.customer_id=c.id)::int AS account_count
+           FROM customers c ORDER BY c.name`
+        : auth.all_accounts === true
+          ? `SELECT c.id,c.name,c.enabled,c.created_at,
+                    (SELECT count(*) FROM managed_accounts ma
+                     WHERE ma.customer_id=c.id)::int AS account_count
+             FROM customers c WHERE c.id=$1`
+          : `SELECT c.id,c.name,c.enabled,c.created_at,
+                    (SELECT count(*) FROM managed_accounts ma
+                     WHERE ma.customer_id=c.id
+                       AND EXISTS(
+                         SELECT 1 FROM api_client_accounts access
+                         WHERE access.client_id=$2
+                           AND access.account_id=ma.account_id
+                       ))::int AS account_count
+             FROM customers c WHERE c.id=$1`,
+      allCustomers
+        ? []
+        : auth.all_accounts === true
+          ? [auth.customer_id]
+          : [auth.customer_id, auth.id],
     );
     res.json(result.rows);
   });
@@ -608,7 +631,7 @@ export function accountManagementRoutes(pool: Pool) {
     }
     const result = await pool.query(
       `INSERT INTO managed_accounts(account_id,customer_id,display_name)
-       VALUES($1,$2,$3)
+       VALUES($1,$2,COALESCE($3::text,$1))
        ON CONFLICT(account_id) DO UPDATE SET
          customer_id=excluded.customer_id,
          display_name=COALESCE(excluded.display_name,managed_accounts.display_name),
@@ -641,6 +664,11 @@ export function accountManagementRoutes(pool: Pool) {
       .object({
         name: z.string().trim().min(1).max(120),
         role: z.enum(["admin", "operator", "viewer"]).default("operator"),
+        all_accounts: z.boolean().default(true),
+        account_ids: z
+          .array(z.string().regex(/^\d+$/))
+          .max(200)
+          .default([]),
       })
       .strict()
       .parse(req.body);
@@ -652,31 +680,77 @@ export function accountManagementRoutes(pool: Pool) {
       res.status(404).json({ error: "Customer not found" });
       return;
     }
+    const accountIds = [...new Set(body.account_ids)];
+    if (!body.all_accounts) {
+      if (!accountIds.length) {
+        res.status(400).json({
+          error: "Select at least one account or grant all customer accounts",
+        });
+        return;
+      }
+      const allowed = await pool.query(
+        `SELECT account_id FROM managed_accounts
+         WHERE customer_id=$1 AND account_id=ANY($2::text[])`,
+        [customer, accountIds],
+      );
+      if (allowed.rowCount !== accountIds.length) {
+        res.status(400).json({
+          error: "One or more accounts do not belong to this customer",
+        });
+        return;
+      }
+    }
     const token = randomBytes(32).toString("hex");
     const id = randomUUID();
-    await pool.query(
-      "INSERT INTO api_clients(id,customer_id,name,token_hash,role) VALUES($1,$2,$3,$4,$5)",
-      [
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO api_clients(
+           id,customer_id,name,token_hash,role,all_accounts
+         ) VALUES($1,$2,$3,$4,$5,$6)`,
+        [
+          id,
+          customer,
+          body.name,
+          createHash("sha256").update(token).digest("hex"),
+          body.role,
+          body.all_accounts,
+        ],
+      );
+      for (const accountId of accountIds)
+        await client.query(
+          `INSERT INTO api_client_accounts(client_id,account_id)
+           VALUES($1,$2)`,
+          [id, accountId],
+        );
+      await writeAudit(
+        client,
+        auth,
+        "client_token_issued",
         id,
+        {
+          name: body.name,
+          role: body.role,
+          all_accounts: body.all_accounts,
+          account_ids: body.all_accounts ? [] : accountIds,
+        },
         customer,
-        body.name,
-        createHash("sha256").update(token).digest("hex"),
-        body.role,
-      ],
-    );
-    await writeAudit(
-      pool,
-      auth,
-      "client_token_issued",
-      id,
-      { name: body.name, role: body.role },
-      customer,
-    );
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
     res.status(201).json({
       id,
       customer_id: customer,
       name: body.name,
       role: body.role,
+      all_accounts: body.all_accounts,
+      account_ids: body.all_accounts ? [] : accountIds,
       token,
       token_notice:
         "Store this token securely. It is shown once and only its SHA-256 hash is stored.",
@@ -691,10 +765,18 @@ export function accountManagementRoutes(pool: Pool) {
     }
     const customer = z.uuid().parse(req.params.customer);
     const result = await pool.query(
-      `SELECT id,customer_id,name,role,enabled,created_at
-       FROM api_clients
-       WHERE customer_id=$1
-       ORDER BY created_at DESC`,
+      `SELECT client.id,client.customer_id,client.name,client.role,
+              client.enabled,client.all_accounts,client.created_at,
+              COALESCE(
+                array_agg(access.account_id ORDER BY access.account_id)
+                  FILTER (WHERE access.account_id IS NOT NULL),
+                '{}'::text[]
+              ) AS account_ids
+       FROM api_clients client
+       LEFT JOIN api_client_accounts access ON access.client_id=client.id
+       WHERE client.customer_id=$1
+       GROUP BY client.id
+       ORDER BY client.created_at DESC`,
       [customer],
     );
     res.json(result.rows);
@@ -709,28 +791,140 @@ export function accountManagementRoutes(pool: Pool) {
     const customer = z.uuid().parse(req.params.customer);
     const client = z.uuid().parse(req.params.client);
     const body = z
-      .object({ enabled: z.boolean() })
+      .object({
+        enabled: z.boolean().optional(),
+        all_accounts: z.boolean().optional(),
+        account_ids: z
+          .array(z.string().regex(/^\d+$/))
+          .max(200)
+          .optional(),
+      })
       .strict()
+      .refine(
+        (value) =>
+          value.enabled !== undefined ||
+          value.all_accounts !== undefined ||
+          value.account_ids !== undefined,
+        { message: "At least one client setting is required" },
+      )
       .parse(req.body);
-    const result = await pool.query(
-      `UPDATE api_clients SET enabled=$3
-       WHERE id=$1 AND customer_id=$2
-       RETURNING id,customer_id,name,role,enabled,created_at`,
-      [client, customer, body.enabled],
+    const current = await pool.query(
+      `SELECT id,name,enabled,all_accounts FROM api_clients
+       WHERE id=$1 AND customer_id=$2`,
+      [client, customer],
     );
-    if (!result.rowCount) {
+    if (!current.rowCount) {
       res.status(404).json({ error: "Client token not found" });
       return;
+    }
+    const accountIds =
+      body.account_ids === undefined
+        ? undefined
+        : [...new Set(body.account_ids)];
+    if (accountIds?.length) {
+      const allowed = await pool.query(
+        `SELECT account_id FROM managed_accounts
+         WHERE customer_id=$1 AND account_id=ANY($2::text[])`,
+        [customer, accountIds],
+      );
+      if (allowed.rowCount !== accountIds.length) {
+        res.status(400).json({
+          error: "One or more accounts do not belong to this customer",
+        });
+        return;
+      }
+    }
+    const nextAllAccounts =
+      body.all_accounts ??
+      (accountIds !== undefined ? false : current.rows[0].all_accounts);
+    if (!nextAllAccounts && accountIds === undefined) {
+      const grants = await pool.query(
+        "SELECT count(*)::int AS count FROM api_client_accounts WHERE client_id=$1",
+        [client],
+      );
+      if (!grants.rows[0].count) {
+        res.status(400).json({
+          error: "Select at least one account or grant all customer accounts",
+        });
+        return;
+      }
+    }
+    const db = await pool.connect();
+    let updated;
+    try {
+      await db.query("BEGIN");
+      updated = await db.query(
+        `UPDATE api_clients SET
+           enabled=COALESCE($3,enabled),
+           all_accounts=$4
+         WHERE id=$1 AND customer_id=$2
+         RETURNING id,customer_id,name,role,enabled,all_accounts,created_at`,
+        [
+          client,
+          customer,
+          body.enabled ?? null,
+          nextAllAccounts,
+        ],
+      );
+      if (nextAllAccounts) {
+        await db.query(
+          "DELETE FROM api_client_accounts WHERE client_id=$1",
+          [client],
+        );
+      } else if (accountIds !== undefined) {
+        await db.query(
+          "DELETE FROM api_client_accounts WHERE client_id=$1",
+          [client],
+        );
+        if (!accountIds.length) {
+          await db.query("ROLLBACK");
+          res.status(400).json({
+            error: "Select at least one account or grant all customer accounts",
+          });
+          return;
+        }
+        for (const accountId of accountIds)
+          await db.query(
+            `INSERT INTO api_client_accounts(client_id,account_id)
+             VALUES($1,$2)`,
+            [client, accountId],
+          );
+      }
+      await db.query("COMMIT");
+    } catch (error) {
+      await db.query("ROLLBACK");
+      throw error;
+    } finally {
+      db.release();
     }
     await writeAudit(
       pool,
       auth,
-      body.enabled ? "client_token_enabled" : "client_token_revoked",
+      body.enabled === false
+        ? "client_token_revoked"
+        : body.enabled === true
+          ? "client_token_enabled"
+          : "client_token_access_updated",
       client,
-      { customer_id: customer, name: result.rows[0].name },
+      {
+        customer_id: customer,
+        name: updated.rows[0].name,
+        all_accounts: nextAllAccounts,
+        account_ids: accountIds ?? undefined,
+      },
       customer,
     );
-    res.json(result.rows[0]);
+    const grants =
+      nextAllAccounts
+        ? []
+        : (
+            await pool.query(
+              `SELECT account_id FROM api_client_accounts
+               WHERE client_id=$1 ORDER BY account_id`,
+              [client],
+            )
+          ).rows.map((row) => row.account_id);
+    res.json({ ...updated.rows[0], account_ids: grants });
   });
 
   router.get("/managed-accounts/:account/schedule", async (req, res) => {

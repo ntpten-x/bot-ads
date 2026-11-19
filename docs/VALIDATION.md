@@ -1601,7 +1601,7 @@ Live Database-first smoke on the established account passed:
   five Ads; unknown values were not converted to zero
 - no browser errors and no mobile overflow
 
-The newly switched account `277466439080476` was exercised through the real
+The newly switched account `ACCOUNT_ID` was exercised through the real
 Report Studio UI with explicit `Asia/Bangkok` and the 7-day attribution scope:
 
 - Meta reported 34 Ads; analysis kept two attribution scopes separate
@@ -1649,5 +1649,342 @@ Validation passed:
   observation and exposed its count in the workspace
 - `test:optimization-web` passed the evidence ledger, rebuild, plan approval
   boundary, experiment start and mobile layout
-- live account `224564085079365` produced 12 evidence-based recommendations
+- live account `ACCOUNT_ID` produced 12 evidence-based recommendations
   from 12 eligible peers in the complete 40-Ad report scope
+
+## Receipt semantics and report-input diagnostics — 19 Nov 2026
+
+Extension source is now `0.6.48`.
+
+- `commandResultSchema` adds a shared `collection` receipt block:
+  `collection_started`, `active`, `job_id` and `job_status`
+- `report.collect` still completes its command when collection starts, but the
+  receipt no longer relies on command status alone
+- Report Studio continues the collection state when `collection.active=true` and
+  displays both command and collection status
+- API integration verifies the collection block survives command result
+  persistence and command polling
+- Report Studio UI fixture verifies the workflow displays
+  `Command: done · Collection: running`
+- `test:reader` now reads the expected version from the manifest instead of a
+  hard-coded version and passed at `0.6.48`
+
+`test:report-input` now emits phase logs, has a 30-second default Playwright
+timeout and is split into independent processes:
+
+- `test:report-input-columns`: ผ่านประมาณ 67 วินาที
+- `test:report-input-search`: ผ่านประมาณ 113 วินาที
+- `test:report-input-guards`: ผ่านประมาณ 52 วินาที
+- `test:report-input-lease`: ผ่าน
+- `test:report-input-paging`: ผ่านประมาณ 19 วินาที
+- `test:report-input-authority`: ผ่าน
+
+The aggregate `npm run test:report-input` retains all six phases, while each
+phase can be rerun and diagnosed independently.
+
+Optimization workspace fallback was also corrected after live testing:
+
+- choose the best Ads scope across all cached operator contexts inside a job
+- if the newest job has no usable Ads scope, fall back to the newest prior job
+  that does
+- integration fixture verifies an empty newest job cannot hide a complete prior
+  scope
+- live result: the established account resolves to its complete `40/40` scope;
+  the switched account resolves to its usable partial scope instead of returning
+  no scope
+
+Guided frontend mode validation:
+
+- default navigation shows Start, Ads Results, Recommended Actions, Accounts and
+  Help only
+- Advanced Tools reveals Control, Import, Analysis, Data/Export, Raw Captures
+  and History
+- overview calculates one next action from connection, Ads count,
+  recommendations and draft plans
+- simple optimization view hides technical policy/experiment/creative panels
+- `npm run test:simple-mode` passed at desktop and 390px mobile width
+
+Account-level access and read-load validation:
+
+- migration `012_account_level_access` adds `all_accounts` and
+  `api_client_accounts`
+- limited operator token sees only its granted account, cannot export a second
+  account in the same Customer, and `/customers.account_count` reflects only
+  granted accounts
+- updating the client to `all_accounts=true` immediately expands its visibility
+- existing token callers remain compatible because issuance defaults to
+  all-account access unless the UI explicitly selects limited accounts
+- `check:accounts-load` with 2 enabled accounts, 20 rounds and 120 requests
+  completed with 0 failures:
+  - Summary p50 4 ms / p95 7 ms
+  - Optimization Workspace p50 16 ms / p95 24 ms
+  - paginated Export p50 8 ms / p95 14 ms
+
+After reloading the live Extension to `0.6.48`, the Device heartbeat reported
+`report_input=true`. The first read-only probe reached a Meta page with disabled
+report control. After the page stabilized, a retry returned:
+
+- command status: `done`
+- collection phase: `collection_started`
+- collection active: `true`
+- collection job status: `running`
+- collection job ID: present
+
+This verifies command and collection completion are no longer conflated in the
+live receipt.
+
+The started collection then remained at `rows=0` after 5/6 row-load attempts
+although headers and switches were visible. The job was explicitly paused to
+release the queue and report-input lease. No snapshots, normalized rows or Meta
+mutations were produced in that run. The Ads Manager page must have actual
+rendered rows before retrying collection.
+
+## Performance eligibility and cache version — 19 Nov 2026
+
+The performance contract now treats `payment_error`, `off` and `parent_off` as
+diagnostics only. They remain visible in delivery counts and raw evidence, but
+are removed before:
+
+- capture result groups, weighted totals, medians and best/worst rankings
+- normalized-analysis peer selection and median comparison
+- Optimization recommendation peer selection
+- Report Studio KPI, chart, scope comparison and concentration calculations;
+  the diagnostic table and delivery-status summary still show these rows
+
+The shared parser accepts Thai/English disabled and paused labels including
+`ปิด`, `ปิดใช้งาน`, `ปิดใช้งานอยู่`, `paused` and `disabled`. No
+`paused_low_cost` recommendation is emitted. `performance_excluded_counts`
+separately reports billing/disabled diagnostics without turning them into
+performance signals.
+
+`013_report_analysis_version` adds `analyzer_version` to the derived report
+cache. `captureAnalysisVersion=2` causes old cached rankings to be recomputed
+from raw snapshots. The API integration explicitly downgrades cache rows to
+version 0 and verifies that Report Studio/API and Optimization Workspace restore
+the current version instead of returning stale results.
+
+Validation passed:
+
+- `npm run check` — strict typecheck, 93/93 unit tests, Extension/API build
+- `npm run typecheck:web`
+- `npm run build:web`
+- `npm run test:captures` — raw persistence, report-cache refresh,
+  materialization, optimization and account isolation
+- `npm run test:analysis` — persisted normalized analysis and import flow
+- `npm run test:report-studio` — six report views, filters and mobile layout
+- `npm run test:optimization-web`
+- `npm run test:capture-analysis-web`
+- `npm run health` — API and local PostgreSQL ready
+
+No live Meta collection or mutation was performed for this semantic correction.
+
+### Live Report Studio acceptance on cached Meta captures — 19 Nov 2026
+
+`npm run check:live-report` passed against the connected data without Meta
+mutation:
+
+- current switched account: `29` verified Ads, `34` reported, coverage
+  `partial`; delivery diagnostics were `payment_error=14` and
+  `parent_off=15`
+- performance rows after eligibility filtering: `0`
+- ranking eligible: `0`
+- result groups: `0`
+- Optimization Workspace recommendations after current-scope filtering: `0`
+- all five secondary chart views exercised with honest empty states
+- mobile viewport had no horizontal overflow and the browser reported no page
+  errors
+
+The older complete scope was also rechecked explicitly:
+
+- `40/40` verified Ads, coverage `complete`
+- `payment_error=35`, `parent_off=5`
+- performance rows: `0`, ranking: `0`, result groups: `0`
+- Optimization Workspace recommendations: `0`
+
+This live run exposed and fixed one additional issue: previously stored
+recommendations were still listed even though the refreshed analysis excluded
+all 40 Ads. Workspace now returns only recommendations whose current
+job/scope/source key is supported by a fresh deterministic evaluation. Historical
+plans remain visible as audit records and are not treated as current advice.
+
+Read-load check passed across the two currently connected accounts: `30`
+requests, `0` failures; Summary p50/p95 `5/8 ms`, Optimization Workspace
+`19/299 ms`, paginated Export `7/12 ms`.
+
+A new Meta collection could not be started at this point because the Extension
+heartbeat was stale and `report_input=false`. The safety guard correctly
+blocked it. The operator must focus the Ads Manager tab, open the Extension
+popup, enable command intake and open the 15-minute report-input lease before a
+new live `report.collect` can run.
+
+### Gridless live Ads layout — 0.6.52
+
+After reloading Extension `0.6.48`, a fresh Device registered with a healthy
+heartbeat and `report_input=true`. The real Ads Manager page showed:
+
+- `1–200` of `794` Ads in the selected report
+- 14 rendered headers including IDs, Spend, Results and Impressions
+- visible row switches/checkboxes and the footer total
+
+`report.collect` prepared all required columns but failed after six attempts
+with `rows=0` because this Meta layout exposed no `role="row"` / `tbody tr`
+wrappers. A read-only screenshot and inspect confirmed the rows were present;
+this was a reader-layout gap, not an empty account. No snapshot, normalized row
+or Meta mutation was produced by the failed job.
+
+Extension `0.6.49` added a visible-header fallback for gridless layouts. Live
+acceptance showed the first fallback still depended too much on cloned header
+geometry. `0.6.50` removed that dependency. A second live attempt exposed that
+Meta can render headers and rows in separate portals whose only common ancestor
+is `body`; the fallback loop stopped before testing that ancestor. `0.6.51`
+included that body ancestor check. A third live attempt showed geometry
+extraction was still gated on the text fallback and stopped before `body`.
+`0.6.52` removes that gate, uses readable headers (with a visible-header
+fallback), and searches row anchors through the body while retaining alignment,
+ID, column and scope guards. The reader fixture covers clipped headers and
+split portals. `test:reader` and TypeScript passed, and the Extension/API build
+is `0.6.52`.
+
+`0.6.52` still returned `rows=0` on the live gridless layout. `0.6.53` adds a
+bounded `reader_diagnostics` object to the raw result and collection error:
+visible/readable/observed header counts, visible switches/checkboxes, anchor and
+band counts, and mapped text/row counts. This diagnostic does not create a
+snapshot or normalized insight when no verified row exists. It is added so the
+next live run identifies the exact remaining DOM gate instead of retrying
+blindly.
+
+`0.6.53` diagnostics confirmed a `role=table` with no grid cells and switch
+chains present at the row coordinates. `0.6.54` added header/marker ancestor
+diagnostics. That run still produced no reader snapshot detail, so `0.6.55`
+wraps `readVisibleTable` in an error boundary that returns only the exception
+message if the reader itself fails. It still does not emit a partial snapshot.
+
+`0.6.55` exposed a serialization bug: the `readVisibleTable` wrapper referenced
+an outer `readVisibleTableUnsafe` function that Chrome `executeScript` did not
+serialize. `0.6.56` executes the complete reader function directly.
+
+`0.6.56` executed the full reader without throwing but still did not expose a
+serializable snapshot. `0.6.57` clones the reader result through JSON before
+returning and adds `reader_missing` / `reader_keys` diagnostics.
+
+`0.6.57` still returned `reader_missing=true`, indicating the page could not
+return the full reader result. `0.6.58` returns a small diagnostic result when
+no rows/tables are readable, including internal anchor/band/text mapping counts
+and the full-result byte size. It still emits no snapshot on this path.
+
+`0.6.58` still returned `reader_missing=true`, even with the smaller result.
+`0.6.59` moves the exception boundary inside the function executed by
+`chrome.scripting.executeScript`; any thrown DOM/read error is returned as
+`reader_error` without page context escaping the reader.
+
+`0.6.59` reported the exact exception: `manifest_default is not defined`.
+Chrome serializes only the injected function, not imports captured in the
+background module. `0.6.60` passes `manifest.version` as an explicit script
+argument and removes the external module reference from page execution.
+
+### 0.6.60 live gridless acceptance
+
+After the module-reference fix in `0.6.60`, the real Ads Manager page was read
+successfully. Job `652e285f-c0d1-48ac-9dbc-01878603d195`:
+
+- persisted `2` snapshots and `50` raw rows
+- produced `50` verified Ad IDs with zero unresolved observations
+- one reporting scope had `19` verified rows and unknown delivery/spend context
+- the attribution-aware scope had `31` verified rows, all `payment_error`
+- performance result groups and ranking stayed empty
+- Optimization Workspace returned `0` current recommendations
+- materialization kept `50` rows `needs_review` because timezone/breakdown/
+  filters/result type and some required metrics were not verified
+- coverage remained `partial` against Meta's `794` reported Ads
+
+The vertical reader exposed one remaining paging limitation: step 2 returned
+`reporting_view_changed_before_input` and the job ended `needs_review`. The
+captured rows are valid raw evidence and persisted, but this run does not prove
+all 794 Ads were read. No Meta mutation occurred.
+
+Validation after the fix: `npm run check` passed with 93/93 unit tests and
+Extension/API build, `test:reader` passed, `npm run typecheck:web` passed and the
+backend/PostgreSQL health check passed.
+
+### Vertical paging and next-page continuation — 0.6.62
+
+Live `0.6.61` improved the same job from 2 to 8 snapshots after relaxing the
+pre-input repaint guard while retaining target re-probing and introduced-row
+proof. The run persisted 103 observations / 103 unique IDs across reporting
+contexts and reached the bottom of the first `1–200 of 794` page.
+
+`0.6.62` adds a bounded trusted click for the visible Next/ถัดไป control. It
+revalidates the report-input lease, account, tab and active job immediately
+before the click, requires the page-range signature to change, resets the row
+viewport and continues within the same job, up to 10 pages. `test:report-input-paging`
+verifies the trusted next-page click and page-range change.
+
+Live acceptance must still verify pages 2–4 and prove that all reported Ads are
+read without cross-page identity or context contamination.
+
+Live `0.6.62` successfully transitioned pages 1→2→3 and accumulated 460 unique
+IDs. The page-3 click did change the URL to `ad_page_id=3` and the eventual UI
+to `601–794`; however the page-range text lagged by more than the 8-second
+postcondition window, so the job ended with `reporting_page_unchanged` before
+reading the final page. `0.6.63` includes `ad_page_id` in the page signature so
+the transition is verified as soon as Meta changes its URL. Final four-page
+live acceptance remains pending.
+
+Live `0.6.63` exposed a reset gap instead of a pagination gap: an earlier run
+left the tab on `ad_page_id=3`, and a new job reused that URL as page 1. It read
+95 rows from the final page and correctly ended because Next was unavailable.
+`0.6.64` treats any `ad_page_id` in the route as stale state and navigates to a
+clean first-page reporting URL before starting a new job.
+
+Live `0.6.64` reset page 4 back to page 1 and transitioned to page 2, but the
+job resumed before the new page's rows were readable and stopped with
+`row_fingerprint_unavailable`. `0.6.65` waits for both the URL/page signature
+change and a ready row fingerprint before declaring the page transition
+complete.
+
+Live `0.6.65` still allowed a temporary repaint race: the page range had changed
+while row fingerprints still belonged to the previous page. `0.6.66` records the
+pre-click row fingerprints and requires at least one new fingerprint before the
+job resumes scrolling.
+
+Live `0.6.66` still stopped with `reporting_view_blocked` when Chrome lost focus
+during the long run. `0.6.67` re-activates/focuses only the already-bound Meta
+tab at each collection step, then re-validates account, route and job authority.
+
+`0.6.67` then reached page 2, but the debugger-backed Next transition could
+stall on a long run. `0.6.68` adds a bounded DOM-click fallback only after the
+trusted click fails, and verifies the page range changes. The paging fixture
+covers both the trusted click and the fallback while modal, lease and account
+guards remain active.
+
+Screenshot evidence from the next live run showed the Meta column-customization
+dialog still open. The fast-reuse path had returned success without checking
+that dialog was closed. `0.6.69` requires `probe("closed")` before reuse; an open
+dialog is pruned/saved through the existing guarded flow instead.
+
+`0.6.69` then returned `Report control disabled` because the open dialog also
+blocked the Columns trigger underneath it. `0.6.70` reuses the already-open
+dialog directly and does not click the blocked trigger. The open-dialog fixture
+passes with dialog close, column validation and no publish action.
+
+## Data lifecycle validation — 19 Nov 2026
+
+Migration `014_data_lifecycle` was applied locally without deleting existing
+data. The backfill found 693 unique Ad IDs across captured evidence at the time
+of migration, and the account-scoped API returned the catalog and policy
+without exposing cross-account data.
+
+Validation passed:
+
+- `npm run db:migrate`
+- lifecycle GET and dry-run preview against local PostgreSQL
+- `npm run data:lifecycle` dry-run only; no destructive operation by default
+- fixture integration applies lifecycle to fixture rows only, rolls one daily
+  observation into `ad_performance_monthly`, deletes an old promoted snapshot,
+  and retains a synthetic `needs_review` snapshot
+- `npm run test:captures`
+- `npm run typecheck`
+
+The current policy is 30-day raw capture, 540-day daily metrics, 36-month
+monthly rollups and 730-day duplicate entity-version retention. Apply requires
+the explicit `DATA_LIFECYCLE_APPLY=apply-data-lifecycle` environment variable.

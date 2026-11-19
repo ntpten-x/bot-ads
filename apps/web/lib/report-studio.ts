@@ -3,6 +3,7 @@ import type {
   Delivery,
   LevelAnalysis,
 } from "../../../packages/core/src/capture-analysis";
+import { nonPerformanceDeliveries } from "../../../packages/core/src/capture-analysis";
 import { recordSource } from "../../../packages/core/src/analysis";
 import type { AdRecord } from "../../../packages/core/src/index";
 
@@ -113,6 +114,12 @@ export type ReportRow = AnalyzedRow & {
   metric_value: number | null;
   identity_state: "verified" | "observed";
 };
+
+export function buildPerformanceRows(rows: ReportRow[]) {
+  return rows.filter(
+    (row) => !nonPerformanceDeliveries.has(row.delivery),
+  );
+}
 
 export function metricValue(row: AnalyzedRow, metric: ReportMetric) {
   if (metric === "roas")
@@ -243,13 +250,16 @@ export function buildScopeBars(levels: LevelAnalysis[], metric: ReportMetric) {
   const scoped = levels
     .filter((level) => level.level === "ads" && level.rows.length)
     .map((level) => {
-      const aggregate = aggregateRows(level.rows, metric);
+      const rows = level.rows.filter(
+        (row) => !nonPerformanceDeliveries.has(row.delivery),
+      );
+      const aggregate = aggregateRows(rows, metric);
       return {
         level,
         label: scopeLabel(level),
         value: aggregate.value,
         present: aggregate.present,
-        total: level.rows.length,
+        total: rows.length,
         reason: aggregate.reason,
       };
     })

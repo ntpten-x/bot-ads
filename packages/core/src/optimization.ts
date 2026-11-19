@@ -1,5 +1,9 @@
 import { z } from "zod";
-import type { AnalyzedRow, LevelAnalysis } from "./capture-analysis";
+import {
+  nonPerformanceDeliveries,
+  type AnalyzedRow,
+  type LevelAnalysis,
+} from "./capture-analysis";
 
 export const optimizationPolicySchema = z
   .object({
@@ -63,6 +67,7 @@ function eligibleRows(level: LevelAnalysis, policy: OptimizationPolicy) {
     (row) =>
       row.entity_id !== null &&
       row.mapping === "verified" &&
+      !nonPerformanceDeliveries.has(row.delivery) &&
       row.results !== null &&
       row.results >= policy.min_results &&
       row.cost_per_result !== null &&

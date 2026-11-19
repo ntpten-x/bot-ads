@@ -20,6 +20,30 @@ export default function DataView({
   busy: boolean;
   showDetails: (title: string, data: unknown) => void;
 }) {
+  const lifecycle = useSWR<{
+    catalog: {
+      ads: number;
+      seen_last_30_days: number;
+      by_delivery: { delivery: string; count: number }[];
+    };
+    policy: {
+      raw_capture_days: number;
+      failed_capture_days: number;
+      daily_metrics_days: number;
+      monthly_metrics_months: number;
+      entity_version_days: number;
+    };
+    eligible: {
+      daily_observations_to_rollup: number;
+      monthly_rollups: number;
+      raw_snapshots_to_purge: number;
+      old_entity_versions: number;
+    };
+    storage: { raw_capture_bytes: number };
+  }>(account ? `/data-lifecycle?account_id=${account}` : null, api, {
+    revalidateOnFocus: false,
+  });
+  const [lifecycleResult, setLifecycleResult] = useState("");
   const { data, error, isLoading, mutate } = useSWR<{
     coverage: string;
     records: AdRecord[];
@@ -65,7 +89,85 @@ export default function DataView({
     current = Math.min(page, pages);
   const visible = records.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
   return (
-    <Panel
+    <>
+      <Panel
+        title="นโยบายเก็บข้อมูล"
+        subtitle="เก็บ Catalog ของ Ads ระยะยาว แต่จำกัด raw snapshots และ daily metrics ตามความจำเป็น"
+        action={
+          <button
+            className="secondary"
+            disabled={!account || busy}
+            onClick={() =>
+              void run("lifecycle-preview", async () => {
+                const result = await api<{
+                  eligible: {
+                    daily_observations_to_rollup: number;
+                    raw_snapshots_to_purge: number;
+                    old_entity_versions: number;
+                  };
+                }>("/data-lifecycle/preview", { account_id: account });
+                setLifecycleResult(
+                  `ตรวจแล้ว: daily ${number(result.eligible.daily_observations_to_rollup)} รายการ, raw ${number(result.eligible.raw_snapshots_to_purge)} snapshot, entity versions ${number(result.eligible.old_entity_versions)} รายการ`,
+                );
+                await lifecycle.mutate();
+              })
+            }
+          >
+            <Icon name="refresh" />
+            ตรวจแผนลบข้อมูล
+          </button>
+        }
+      >
+        {!account ? (
+          <p className="muted small">เลือกบัญชีโฆษณาก่อน</p>
+        ) : lifecycle.error ? (
+          <p className="notice-error">{String(lifecycle.error.message)}</p>
+        ) : lifecycle.data ? (
+          <>
+            <div className="plain-summary">
+              <div>
+                <span>Ads Catalog</span>
+                <strong>{number(lifecycle.data.catalog.ads)}</strong>
+                <small>
+                  เห็นใน 30 วันล่าสุด{" "}
+                  {number(lifecycle.data.catalog.seen_last_30_days)}
+                </small>
+              </div>
+              <div>
+                <span>Daily metrics</span>
+                <strong>{lifecycle.data.policy.daily_metrics_days} วัน</strong>
+                <small>หลังจากนั้นสรุปเป็นรายเดือน</small>
+              </div>
+              <div>
+                <span>Raw capture</span>
+                <strong>{lifecycle.data.policy.raw_capture_days} วัน</strong>
+                <small>
+                  {number(Math.round(lifecycle.data.storage.raw_capture_bytes / 1024 / 1024))} MB ปัจจุบัน
+                </small>
+              </div>
+              <div>
+                <span>Monthly rollups</span>
+                <strong>
+                  {number(lifecycle.data.eligible.monthly_rollups)}
+                </strong>
+                <small>
+                  เก็บ {lifecycle.data.policy.monthly_metrics_months} เดือน
+                </small>
+              </div>
+            </div>
+            <div className="inline-note">
+              Raw ที่ยังต้อง review/error จะไม่ถูกลบ. Creative versions และผล
+              recommendation/experiment ถูกเก็บไว้เพื่อเรียนรู้ระยะยาว
+            </div>
+            {lifecycleResult ? (
+              <p className="hint">{lifecycleResult}</p>
+            ) : null}
+          </>
+        ) : (
+          <p className="muted small">กำลังตรวจพื้นที่จัดเก็บ…</p>
+        )}
+      </Panel>
+      <Panel
       title="ข้อมูลที่บันทึกไว้"
       subtitle="แสดง observation ล่าสุดของแต่ละเงื่อนไข สูงสุด 10,000 รายการ"
       action={
@@ -292,6 +394,7 @@ export default function DataView({
           </button>
         </div>
       ) : null}
-    </Panel>
+      </Panel>
+    </>
   );
 }

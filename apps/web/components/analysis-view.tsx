@@ -33,6 +33,8 @@ const labels: Record<string, string> = {
   overlapping_interval: "ช่วงวันที่ทับซ้อน",
   nonpositive_spend: "ยอดใช้จ่ายต้องมากกว่า 0 เพื่อเทียบต้นทุน",
   nonpositive_impressions: "ยังไม่มีอิมเพรสชันสำหรับเทียบ",
+  performance_excluded_delivery_status:
+    "Ads ปิดใช้งานหรือมีข้อผิดพลาดการชำระเงิน จึงไม่นำมาร่วมจัดอันดับ",
   link_ctr: "Link CTR",
   link_cpc: "Link CPC",
   cpm: "CPM",

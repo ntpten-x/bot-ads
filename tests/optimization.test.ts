@@ -102,6 +102,7 @@ function analysis(rows: AnalyzedRow[]): LevelAnalysis {
     },
     delivery_counts: {},
     delivery_observation_counts: {},
+    performance_excluded_counts: {},
     recommendations: [],
     warnings: [],
   };
@@ -113,6 +114,38 @@ test("optimization policy creates evidence-based scale, test and pause candidate
       row("101", 50, 10, "active", 500),
       row("102", 100, 10, "off", null),
       row("103", 200, 10, "active", 700),
+      row("104", 120, 10, "active"),
+    ]),
+    defaultOptimizationPolicy,
+  );
+  assert.equal(result.eligible_scope, true);
+  assert.equal(result.peers, 3);
+  assert.equal(result.median_cost_per_result, 12);
+  assert.deepEqual(
+    result.recommendations.map((item) => [item.entity_id, item.action]),
+    [
+      ["103", "pause_candidate"],
+      ["101", "scale_budget"],
+      ["104", "create_new_test"],
+    ],
+  );
+  assert.ok(
+    result.recommendations.every((item) => item.entity_id !== "102"),
+    "disabled Ads are diagnostics and must not influence peers or recommendations",
+  );
+  assert.ok(result.recommendations.every((item) => item.confidence > 0.5));
+  assert.equal(result.recommendations[0].risk, "medium");
+});
+
+test("payment and disabled delivery states are excluded from optimization evaluation", () => {
+  const result = buildOptimizationRecommendations(
+    analysis([
+      row("501", 50, 10, "active"),
+      row("502", 100, 10, "active"),
+      row("503", 150, 10, "active"),
+      row("504", 1, 10, "payment_error"),
+      row("505", 2, 10, "off"),
+      row("506", 3, 10, "parent_off"),
     ]),
     defaultOptimizationPolicy,
   );
@@ -120,15 +153,9 @@ test("optimization policy creates evidence-based scale, test and pause candidate
   assert.equal(result.peers, 3);
   assert.equal(result.median_cost_per_result, 10);
   assert.deepEqual(
-    result.recommendations.map((item) => [item.entity_id, item.action]),
-    [
-      ["103", "pause_candidate"],
-      ["101", "scale_budget"],
-      ["102", "duplicate_winner"],
-    ],
+    new Set(result.recommendations.map((item) => item.entity_id)),
+    new Set(["501", "502", "503"]),
   );
-  assert.ok(result.recommendations.every((item) => item.confidence > 0.5));
-  assert.equal(result.recommendations[0].risk, "medium");
 });
 
 test("optimization fails closed for partial coverage or insufficient peers", () => {

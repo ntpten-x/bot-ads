@@ -1,6 +1,8 @@
 import { z } from "zod";
+import manifest from "../manifest.json";
 import {
   type BreakdownQueryParam,
+  type CommandCollection,
   botCommandSchema,
   needsReportingNavigation,
   reportingUrl,
@@ -9,13 +11,15 @@ import {
 import { controlUi, uiSession } from "./ui-controller.js";
 import { configureBreakdownWithInput } from "./breakdown-input.js";
 import {
+  advanceReportPageWithInput,
   prepareReportWithInput,
   resetReportScrollWithInput,
   scrollReportColumnsWithInput,
   scrollReportWithInput,
 } from "./report-input.js";
 import {
-  readVisibleTable,
+  clickNextReportPage,
+  readVisibleTableUnsafe as readVisibleTable,
   resetReportingRows,
   scrollReportingRows,
   scrollReportingTable,
@@ -30,6 +34,8 @@ type Job = {
   index: number;
   step: number;
   maxSteps: number;
+  max_pages?: number;
+  page_index?: number;
   scan_columns?: boolean;
   horizontal_step?: number;
   row_reset?: unknown;
@@ -38,7 +44,7 @@ type Job = {
   last_wait_reason?: string;
   level_warnings?: string[];
   /** Vertical paging evidence: methods tried and whether rows changed (no page text). */
-  scroll_log?: { level: Level; step: number; moved: boolean; method: string; tried: unknown[]; reason?: string }[];
+  scroll_log?: { level: Level; step: number; page?: number; moved: boolean; method: string; tried: unknown[]; reason?: string }[];
   zoom?: { original: number; applied: number };
   breakdown_params?: BreakdownQueryParam[];
   status: "running" | "paused" | "needs_review" | "error";
@@ -198,14 +204,21 @@ async function advance() {
   try {
     const job = await getJob();
     if (!job || job.status !== "running") return;
-    const tab = await verifiedTab(job);
+    let tab = await verifiedTab(job);
     if (tab.status !== "complete") return;
     if (!tab.active) {
-      job.status = "paused";
-      job.error = "เปิดแท็บ Meta ที่ผูกไว้ แล้วกดทำต่อ เพื่อให้ Meta แสดงแถวข้อมูล";
-      await put(job);
-      await chrome.alarms.clear("collect");
-      return;
+      await chrome.tabs.update(job.tabId, { active: true });
+      if (tab.windowId !== undefined)
+        await chrome.windows.update(tab.windowId, {
+          focused: true,
+          state: "maximized",
+        });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      tab = await verifiedTab(job);
+      if (!tab.active)
+        throw new Error(
+          "Reporting tab could not be activated for read-only collection",
+        );
     }
     const u = new URL(tab.url!);
     const expected = `/adsmanager/manage/${job.levels[job.index]}`;
@@ -244,22 +257,30 @@ async function advance() {
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: job.tabId },
       func: readVisibleTable,
+      args: [manifest.version],
     });
     const snapshot = result.result;
     const maxAttempts = 6;
     if (!snapshot?.tables.length && !snapshot?.row_observations.length) {
       job.read_attempts = (job.read_attempts ?? 0) + 1;
       const detail = diag
-        ? `headers=${diag.headers}, switches=${diag.switches}, checkboxes=${diag.checkboxes}, rows=${diag.rows}, loading=${diag.loading}`
+        ? `headers=${diag.headers}, switches=${diag.switches}, checkboxes=${diag.checkboxes}, rows=${diag.rows}, loading=${diag.loading}${diag.debug ? `, debug=${JSON.stringify(diag.debug)}` : ""}`
         : "no diagnostics";
-      job.last_wait_reason = `กำลังรอแถวข้อมูลโหลด (${job.read_attempts}/${maxAttempts}; ${detail})`;
+      const readerDetail = snapshot?.reader_error
+        ? `, reader_error=${snapshot.reader_error}`
+        : snapshot?.reader_diagnostics
+          ? `, reader=${JSON.stringify(snapshot.reader_diagnostics)}`
+          : snapshot
+            ? `, reader_present=true, reader_keys=${Object.keys(snapshot).join("|")}`
+            : ", reader_missing=true";
+      job.last_wait_reason = `กำลังรอแถวข้อมูลโหลด (${job.read_attempts}/${maxAttempts}; ${detail}${readerDetail})`;
       if (job.read_attempts < maxAttempts) {
         await put(job);
         return;
       }
       if (!snapshot?.unstructured?.viewport_text)
         throw new Error(
-          `No supported reporting rows after ${maxAttempts} attempts on ${expected} (${detail}). The page may still be loading or use an unsupported layout.`,
+          `No supported reporting rows after ${maxAttempts} attempts on ${expected} (${detail}${readerDetail}). The page may still be loading or use an unsupported layout.`,
         );
       // Keep the visible text as raw evidence, but report that rows were not separated.
       job.level_warnings = [
@@ -298,7 +319,7 @@ async function advance() {
       void publishSoon();
     }
     const hasHorizontalOverflow = !!snapshot.column_alignment_diagnostics?.scrollers?.some(
-      (scroller) => scroller.range > 2,
+      (scroller: { range: number }) => scroller.range > 2,
     );
     if (job.scan_columns && hasHorizontalOverflow) {
       if ((job.horizontal_step ?? 0) < 12) {
@@ -371,11 +392,84 @@ async function advance() {
               : `${job.levels[job.index]}: ไม่ยืนยันการเลื่อนแถว (${native.reason}) ข้อมูลรอบนี้ยังไม่ครบ`,
           ];
       }
+      if (
+        !paging?.moved &&
+        paging?.reason === "reporting_bottom_reached" &&
+        (job.page_index ?? 1) < (job.max_pages ?? 10)
+      ) {
+        const bridge = await getBridge();
+        const pageAdvance = await advanceReportPageWithInput({
+          jobId: job.id,
+          tabId: job.tabId,
+          account: job.account,
+          enabled:
+            !!bridge?.enabled &&
+            bridge.tabId === job.tabId &&
+            bridge.account === job.account,
+        });
+        if ((await getJob())?.status !== "running") return;
+        if (pageAdvance.paged) {
+          job.page_index = (job.page_index ?? 1) + 1;
+          job.step = 0;
+          job.scroll_log = [
+            ...(job.scroll_log ?? []),
+            {
+              level: job.levels[job.index],
+              step: 0,
+              page: job.page_index,
+              moved: true,
+              method: "next_page",
+              tried: [{ method: "native_click", moved: true }],
+            },
+          ].slice(-40);
+          await put(job);
+          setTimeout(() => void advance(), 1500);
+          return;
+        }
+        if (
+          pageAdvance.reason !== "last_page" &&
+          pageAdvance.reason !== "next_page_unavailable"
+        ) {
+          const [fallbackPage] = await chrome.scripting.executeScript({
+            target: { tabId: job.tabId },
+            func: clickNextReportPage,
+            args: [job.account],
+          });
+          if ((await getJob())?.status !== "running") return;
+          if (fallbackPage.result?.paged) {
+            job.page_index = (job.page_index ?? 1) + 1;
+            job.step = 0;
+            job.scroll_log = [
+              ...(job.scroll_log ?? []),
+              {
+                level: job.levels[job.index],
+                step: 0,
+                page: job.page_index,
+                moved: true,
+                method: "next_page",
+                tried: [{ method: "dom_click", moved: true }],
+              },
+            ].slice(-40);
+            await put(job);
+            setTimeout(() => void advance(), 1500);
+            return;
+          }
+        }
+        if (
+          pageAdvance.reason !== "last_page" &&
+          pageAdvance.reason !== "next_page_unavailable"
+        )
+          job.level_warnings = [
+            ...(job.level_warnings ?? []),
+            `${job.levels[job.index]}: เปลี่ยนหน้าถัดไปไม่สำเร็จ (${pageAdvance.reason}) ข้อมูลรอบนี้ยังไม่ครบ`,
+          ];
+      }
       job.scroll_log = [
         ...(job.scroll_log ?? []),
         {
           level: job.levels[job.index],
           step: job.step,
+          page: job.page_index ?? 1,
           moved: !!paging?.moved,
           method: paging?.method ?? "none",
           tried: paging?.tried ?? [],
@@ -544,9 +638,16 @@ async function perform(message: any): Promise<any> {
       tabId: bridge.tabId,
       account: bridge.account,
     });
+    const collection: CommandCollection = {
+      phase: "collection_started",
+      active: started.job?.status === "running",
+      job_id: started.job?.id ?? null,
+      job_status: started.job?.status ?? null,
+    };
     return {
       ui,
       ...started,
+      collection,
     };
   }
   if (message?.command === "breakdown.prepare") {
@@ -752,6 +853,8 @@ async function perform(message: any): Promise<any> {
         index: 0,
         step: 0,
         maxSteps,
+        max_pages: 10,
+        page_index: 1,
         scan_columns: message.scan_columns === true,
         horizontal_step: 0,
         status: "running",

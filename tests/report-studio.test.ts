@@ -12,6 +12,7 @@ import {
   buildConcentration,
   buildDeliverySummary,
   buildHistogram,
+  buildPerformanceRows,
   buildReportRows,
   buildScatter,
   buildScopeBars,
@@ -134,6 +135,7 @@ function level(
     },
     delivery_counts: {},
     delivery_observation_counts: {},
+    performance_excluded_counts: {},
     recommendations: [],
     warnings: [],
   };
@@ -187,6 +189,23 @@ test("delivery summary uses the filtered row set", () => {
       ["unknown", 1],
     ],
   );
+});
+
+test("performance charts exclude billing and disabled Ads while diagnostics stay in the table", () => {
+  const fixture = level("age:25-34", "25–34", [
+    row("111", "Active", 100, 10),
+    row("222", "Disabled", 900, 10, { delivery: "off" }),
+    row("333", "Billing", 800, 10, { delivery: "payment_error" }),
+  ]);
+  const rows = buildReportRows(fixture, { metric: "spend" });
+  assert.equal(rows.length, 3);
+  assert.deepEqual(
+    buildPerformanceRows(rows).map((item) => item.name),
+    ["Active"],
+  );
+  const bars = buildScopeBars([fixture], "spend");
+  assert.equal(bars.rows[0].value, 100);
+  assert.equal(bars.rows[0].total, 1);
 });
 
 test("aggregate cost per result is weighted and refuses mixed result types", () => {

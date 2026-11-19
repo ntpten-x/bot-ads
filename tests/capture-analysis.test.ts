@@ -100,7 +100,10 @@ const live = () =>
 test("delivery text maps to explicit states; unknown text stays unknown", () => {
   assert.equal(parseDelivery("ข้อผิดพลาดในการชำระเงิน"), "payment_error");
   assert.equal(parseDelivery("ปิด"), "off");
+  assert.equal(parseDelivery("ปิดใช้งานอยู่"), "off");
+  assert.equal(parseDelivery("paused"), "off");
   assert.equal(parseDelivery("แคมเปญปิดอยู่"), "parent_off");
+  assert.equal(parseDelivery("แคมเปญปิดใช้งาน"), "parent_off");
   assert.equal(parseDelivery("ใช้งานอยู่"), "active");
   assert.equal(parseDelivery("—"), "unknown");
   assert.equal(parseDelivery("something new"), "unknown");
@@ -146,41 +149,134 @@ test("live-shaped capture: parses metrics, cleans names, keeps unknowns null, es
   assert.ok(a.missing_columns.includes("campaign_id"));
 });
 
-test("ranking uses cost per result among rows with enough results; recommendations are labelled", () => {
-  const a = analyzeCaptureLevel("campaigns", [trustedLive()]);
+const trustedStatusRow = (
+  id: string,
+  name: string,
+  delivery: string,
+  results: string,
+  spend: string,
+  cpr: string,
+): CaptureRow => ({
+  ...row(
+    name,
+    delivery,
+    results,
+    cpr,
+    "1,000",
+    "฿100.00\nต่อวัน",
+  ),
+  identity: id,
+  identity_source: "row_link_href",
+  column_mapping: "semantic",
+  cells: [
+    ...row(
+      name,
+      delivery,
+      results,
+      cpr,
+      "1,000",
+      "฿100.00\nต่อวัน",
+    ).cells,
+    { header: "Amount spent", text: spend },
+  ],
+});
+
+function performanceFixture() {
+  return scoped(
+    [
+      trustedStatusRow("201", "Performance low", "ใช้งานอยู่", "10", "50", "5"),
+      trustedStatusRow("202", "Performance mid", "ใช้งานอยู่", "10", "100", "10"),
+      trustedStatusRow(
+        "203",
+        "Performance typical",
+        "ใช้งานอยู่",
+        "10",
+        "120",
+        "12",
+      ),
+      trustedStatusRow(
+        "204",
+        "Performance high",
+        "ใช้งานอยู่",
+        "10",
+        "200",
+        "20",
+      ),
+      trustedStatusRow(
+        "205",
+        "Performance higher",
+        "ใช้งานอยู่",
+        "10",
+        "150",
+        "15",
+      ),
+      trustedStatusRow(
+        "206",
+        "Payment diagnostic",
+        "ข้อผิดพลาดในการชำระเงิน",
+        "10",
+        "1000",
+        "100",
+      ),
+      trustedStatusRow("207", "Disabled diagnostic", "ปิด", "10", "900", "90"),
+      trustedStatusRow(
+        "208",
+        "Parent disabled diagnostic",
+        "แคมเปญปิดอยู่",
+        "10",
+        "800",
+        "80",
+      ),
+    ],
+    { reported_total_rows: 8 },
+  );
+}
+
+test("performance ranking excludes billing errors and disabled Ads while retaining diagnostics", () => {
+  const a = analyzeCaptureLevel("campaigns", [performanceFixture()]);
   assert.equal(a.ranking.result_type, msg);
   assert.equal(a.ranking.eligible, 5);
-  assert.equal(a.ranking.median_cost_per_result, 15.52);
-  assert.equal(a.ranking.best[0].name, "Fixture D");
-  assert.equal(a.ranking.worst[0].name, "Fixture A");
+  assert.equal(a.ranking.median_cost_per_result, 12);
+  assert.equal(a.ranking.best[0].name, "Performance low");
+  assert.equal(a.ranking.worst[0].name, "Performance high");
   const codes = a.recommendations.map((r) => r.code);
   assert.ok(
     !codes.includes("payment_error"),
     "payment_error is a billing diagnostic, not a performance recommendation",
   );
-  assert.ok(codes.includes("paused_low_cost"));
-  assert.ok(
-    !codes.includes("high_cost_per_result"),
-    "18.63 is below 1.3 × median 15.52",
-  );
-  const strict = analyzeCaptureLevel("campaigns", [trustedLive()], {
-    high_cost_ratio: 1.15,
-  });
-  const high = strict.recommendations.find(
+  assert.ok(!codes.includes("paused_low_cost"));
+  const high = a.recommendations.find(
     (r) => r.code === "high_cost_per_result",
   )!;
   assert.deepEqual(
     high.rows,
-    ["Fixture A (฿18.63)"],
-    "paused rows are not flagged as overspending",
+    ["Performance high (฿20)"],
+    "only Ads with performance-eligible delivery are ranked",
   );
-  assert.ok(codes.includes("partial_coverage"));
+  assert.equal(a.coverage, "complete");
   assert.ok(!codes.includes("add_spend_column"));
   assert.ok(!codes.includes("add_id_column"));
   const group = a.result_groups[0];
-  assert.equal(group.results, 16 + 93 + 380 + 178 + 188);
+  assert.equal(group.results, 50);
+  assert.equal(group.rows, 5);
   assert.equal(group.spend_basis, "column");
-  assert.equal(a.delivery_counts.payment_error, 3);
+  assert.deepEqual(a.ranking.best.map((r) => r.name), [
+    "Performance low",
+    "Performance mid",
+  ]);
+  assert.ok(
+    a.ranking.best
+      .concat(a.ranking.worst)
+      .every((r) => !/diagnostic/i.test(r.name ?? "")),
+  );
+  assert.equal(a.delivery_counts.payment_error, 1);
+  assert.equal(a.delivery_counts.off, 1);
+  assert.equal(a.delivery_counts.parent_off, 1);
+  assert.deepEqual(a.performance_excluded_counts, {
+    payment_error: 1,
+    off: 1,
+    parent_off: 1,
+  });
 });
 
 test("no median comparison with fewer than three comparable rows", () => {
@@ -483,20 +579,6 @@ test("missing context, unverified mapping, changed unlabeled rows and excess IDs
   assert.notEqual(excess.coverage, "complete");
   assert.ok(excess.blockers.includes("reported_count_mismatch"));
 });
-
-function trustedLive() {
-  const values = ["298.08", "1443.36", "5445.40", "2346.04", "0", "3337", "0"];
-  return scoped(
-    live().row_observations.map((r, i) => ({
-      ...r,
-      identity: String(100 + i),
-      identity_source: "row_link_href",
-      column_mapping: "semantic",
-      cells: [...r.cells, { header: "Amount spent", text: values[i] }],
-    })),
-    { reported_total_rows: 8 },
-  );
-}
 
 test("unverified ID columns and arbitrary identity sources never become verified entities", () => {
   const unverified = verified();

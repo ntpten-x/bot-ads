@@ -9,7 +9,11 @@
 สถานะรวมถึง CSV-first reconciliation และ source separation ณ 17 พฤศจิกายน 2026 อยู่ที่
 [HANDOFF_ADS_ANALYSIS_2026-11-17.md](HANDOFF_ADS_ANALYSIS_2026-11-17.md)
 
-เอกสารส่งต่องาน ณ 18 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.47 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+เอกสารส่งต่องาน ณ 19 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.70 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+
+Data lifecycle ล่าสุดอยู่ที่ [DATA_LIFECYCLE.md](DATA_LIFECYCLE.md): catalog Ads,
+status history, monthly rollups, raw retention, dry-run CLI/API และ policy
+ค่าเริ่มต้น
 
 0.6.42 เพิ่ม `report.collect` typed workflow (navigate → prepare report columns → start Ads collection ภายใน Extension command เดียว), Ads-only parent-name materialization, job-level `/captures/jobs/:job/review`, paged/scoped `/export`, PostgreSQL `/insights/trend`, และ Report Studio materialize/context flow. Ads captures ที่มี ID + ชื่อ Campaign/Ad Set ในคอลัมน์สามารถ upsert parent entities ได้โดยไม่ต้องอ่าน hierarchy ก่อน. Report Studio poll เฉพาะงานที่กำลังรันและซ่อน observed rows จากกราฟเป็นค่าเริ่มต้น. ห้ามถือว่า parent name จาก Ads row เป็นหลักฐาน ID; parent IDs ยังต้องมาจาก stable columns/links. Live 0.6.42 พบว่า workflow ถูกส่งถึง Extension แต่ trusted report-input guard ปฏิเสธเพราะแท็บ Meta ไม่ active. 0.6.43 activate/focus/maximize ช่วงเริ่ม workflow แต่ live rerun ยัง fail ระหว่าง dialog; 0.6.44 re-activate bound tab ก่อน trusted input ทุกครั้งจน workflow ผ่าน. Live 0.6.44 พบว่า native custom-scrollbar reset รอ signature ทั้งตารางจน `reporting_view_changed_before_input` จาก metric refresh ทำให้เริ่ม scroll ผิดตำแหน่ง; 0.6.45 จำกัด reset stability เฉพาะ scrollbar geometry และยังยืนยัน row movement หลัง drag. Live 0.6.45 job `67c9bf13-99ba-47b6-95a5-a7ce8e54c4ba` อ่าน 40/40 Ads, 3 snapshots, 87 observations, verified IDs 40, unresolved 0 และ `coverage=complete` สำหรับ scope นี้; materialization ได้ 74 promoted rows และ 35 unique normalized observations โดย 8 raw rows ยังขาด Impressions ตามจริง.
 
@@ -354,3 +358,60 @@ latest-capture outcome observation. Plan approval is distinct from local
 Extension approval. `automated_meta_mutation` remains false until certified page
 adapters and verified readback are implemented. See
 [OPTIMIZATION.md](OPTIMIZATION.md).
+
+Extension `0.6.48` added the shared command result `collection` receipt. A
+`report.collect` command can be `done` while collection is still active; consumers
+must use `collection.active`, `collection.job_id` and `collection.job_status`
+rather than treating command completion as capture completion. Live validation
+confirmed this receipt on the connected device. The live collection was then
+paused after row-load attempts stalled with `rows=0`; see
+`VALIDATION.md`.
+
+The frontend defaults to a guided simple mode. Primary navigation is limited to
+Start, Ads Results, Recommended Actions, Accounts and Help. Expert tools
+(Control, Import, Analysis, Data/Export, Raw Captures and Command History) live
+under the explicit Advanced Tools disclosure. `/#overview` computes one
+next-best action and shows a four-step progress path. Advanced choice is stored
+in `localStorage.collectorAdvancedMode`; fixtures must set it when they need
+technical panels.
+
+Migration `012_account_level_access` adds `api_clients.all_accounts` and
+`api_client_accounts`. Existing clients remain all-account scoped for
+compatibility. New issuance can grant only selected accounts inside one
+Customer. The auth middleware, dashboard, managed-account list, export and all
+account-scoped routes enforce these grants. `check:accounts-load` provides a
+read-only concurrency/performance smoke.
+
+Performance eligibility is now shared through `delivery-status.ts`.
+`payment_error`, `off` and `parent_off` remain visible as delivery diagnostics
+but are excluded from capture analysis result groups/ranking, normalized
+analysis peer medians and Optimization recommendations. The parser accepts Thai
+and English disabled/paused labels, including `ปิดใช้งาน`. Never restore a
+`paused_low_cost` recommendation or treat a disabled Ad as a performance peer.
+
+Migration `013_report_analysis_version` versions the derived
+`capture_job_reports.analysis` cache. The current analyzer version is
+`captureAnalysisVersion=2`. When analysis semantics change, bump it; the
+Report API and Optimization Workspace refresh stale caches from raw snapshots
+instead of reusing old ranking results. Raw captures and normalized observations
+are not deleted.
+
+Optimization Workspace also recomputes eligibility from the selected current
+scope before returning recommendations. A stored recommendation is returned
+only when its `job_id`, `scope_key` and `source_key` are still supported by the
+current deterministic evaluation. Historical plans remain visible for audit,
+but recommendations that depended on billing-error or disabled Ads are hidden.
+
+Extension `0.6.70` adds the gridless-report fallback required by the new live
+account layout. That page rendered 794 Ads with headers, switches and
+checkboxes but no `role="row"` elements, so `0.6.48` incorrectly reported
+`rows=0`. The fallback may keep visible text/geometry as raw evidence, but never
+normalizes it without stable IDs and verified scope. See the `0.6.60` entry in
+`VALIDATION.md`.
+
+Live `0.6.60` then persisted 2 snapshots / 50 raw rows / 50 verified IDs from
+the gridless layout. The attribution-aware scope contained 31 Ads, all
+`payment_error`, and correctly produced no performance group, ranking or
+recommendation. Remaining work is vertical paging:
+`reporting_view_changed_before_input` stopped after the initial viewport, so the
+run covers only part of the 794 reported Ads.

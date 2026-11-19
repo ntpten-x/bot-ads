@@ -2,7 +2,7 @@
 
 วันที่: 18 พฤศจิกายน 2026
 
-สถานะ source/build: Extension `0.6.47`
+สถานะ source/build: Extension `0.6.70`
 
 Branch ที่ส่งต่อ: `master`
 
@@ -66,7 +66,7 @@ readback, idempotency และ rollback ครบ
 ## 3. Architecture
 
 ```text
-Chrome Extension 0.6.47
+Chrome Extension 0.6.70
   → visible Meta Ads Manager UI
   → command queue :4318
   → PostgreSQL raw captures
@@ -130,6 +130,9 @@ navigate (ถ้าจำเป็น)
 | `009_operations_hardening` | audit log และ account collection schedule |
 | `010_optimization_loop` | recommendations/plans/experiments/outcomes/templates |
 | `011_experiment_observations` | entity IDs และ metric ต่อ experiment arm |
+| `012_account_level_access` | all_accounts flag และ per-client account grants |
+| `013_report_analysis_version` | version derived report cache และบังคับคำนวณใหม่เมื่อ analyzer เปลี่ยน |
+| `014_data_lifecycle` | ad catalog, status history, monthly rollups และ retention policy |
 
 ห้ามแก้ migration ที่ apply แล้ว ให้เพิ่ม migration ใหม่
 
@@ -141,6 +144,7 @@ navigate (ถ้าจำเป็น)
 - Customer-scoped admin เห็นเฉพาะ Customer ของตน
 - Viewer ทำ write ไม่ได้
 - Account/Device/Job ต้องอยู่นอก Customer ไม่ได้
+- Client ที่ `all_accounts=false` ต้องมี grant ตรง account ใน Customer เดียวกัน
 - Account disabled บล็อก capture/import/report/command
 - Customer disabled บล็อก token และ schedule
 - Token revoke มีผล request ถัดไป
@@ -338,26 +342,75 @@ Acceptance:
 - footer total ตรงกับ verified IDs
 - materialization reason เหลือเฉพาะข้อมูลที่ Meta ไม่แสดงจริง
 
-### P0: Command receipt semantics
+### P0: Command receipt semantics — resolved in 0.6.48
 
-`report.collect` คืน `done` ขณะ job ยัง `running`
+`report.collect` ยังคืน command `done` เมื่อเริ่มงานแล้ว แต่ receipt มี contract
+แยก collection state ชัดเจน:
 
-Acceptance:
+```json
+{
+  "ok": true,
+  "job": { "id": "JOB_UUID", "status": "running" },
+  "collection": {
+    "phase": "collection_started",
+    "active": true,
+    "job_id": "JOB_UUID",
+    "job_status": "running"
+  }
+}
+```
 
-- receipt แยก `accepted/started` จาก `collection_completed`
-- มี `job_id`, `collection_active`, `job_status`
-- UI/API ไม่ตีความ `done` เป็น capture complete
+- Shared Zod contract: `packages/core/src/control.ts`
+- Backend persists/returns the collection block
+- Report Studio uses `collection.active` to continue collection display/polling
+- Command `done` still means Extension finished dispatching, never capture complete
 
-### P0: Browser test harness
+Fixture/API validation passed. Live `0.6.48` validation also confirmed:
 
-`test:reader` แก้ version แล้ว แต่ `test:report-input` ยังค้าง
+- command status `done`
+- `collection.phase=collection_started`
+- `collection.active=true`
+- `collection.job_status=running`
+- collection job ID present
 
-Acceptance:
+The first live attempt reached a page with disabled report control. After the
+page stabilized, retry produced the collection receipt successfully. The job
+then paused at `rows=0` after 5/6 row-load attempts even though headers and
+switches were visible; it was explicitly paused to release the queue and lease.
+This is a Meta page-readiness limitation, not a receipt contract failure.
 
-- timeout ต่อ phase
-- progress log
-- fail พร้อม phase ที่แน่นอนภายใน 2 นาที
-- ผ่านใน clean CI
+### P0: Browser test harness — split and passing
+
+`test:reader` ใช้ version จาก manifest แล้วและผ่าน
+
+`test:report-input` ถูกแยกเป็น process ย่อย:
+
+- `test:report-input-columns`
+- `test:report-input-search`
+- `test:report-input-guards`
+- `test:report-input-lease`
+- `test:report-input-paging`
+- `test:report-input-authority`
+
+แต่ละ process มี default timeout 30 วินาทีและ progress log แยกชื่อ phase
+
+ผลรัน:
+
+- columns: ผ่าน ประมาณ 67 วินาที
+- search: ผ่าน ประมาณ 113 วินาที
+- guards: ผ่าน ประมาณ 52 วินาที
+- lease: ผ่าน
+- paging: ผ่าน ประมาณ 19 วินาที
+- authority: ผ่าน
+
+`npm run test:report-input` รวมทุก phase ผ่านตามลำดับ แต่ CI ควรแสดงผลแยกต่อ
+phase เพื่อให้รู้ failure ได้ทันที
+
+เพิ่ม fallback ของ Optimization workspace:
+
+- เลือก scope ที่ coverage ดีที่สุดจากทุก operator context ภายใน job แรก
+- ถ้า job ล่าสุดมีแต่ analysis ว่าง ให้ถอยไป job ก่อนหน้าที่มี Ads scope usable
+- fixture ยืนยันว่า empty job ใหม่ไม่สามารถซ่อน complete scope เดิมได้
 
 ### P1: Certified Meta action adapters
 
@@ -428,8 +481,10 @@ Acceptance:
 | `apps/api/src/accounts.ts` | customer/account/token/schedule/audit |
 | `apps/api/src/captures.ts` | raw persistence, promotion, analysis cache |
 | `apps/api/src/optimization.ts` | optimization APIs |
+| `apps/api/src/report-cache.ts` | refresh report cache รุ่นเก่าจาก raw snapshots |
 | `packages/core/src/optimization.ts` | deterministic recommendation engine |
 | `packages/core/src/capture-analysis.ts` | scope aggregation/coverage |
+| `packages/core/src/delivery-status.ts` | shared delivery parser และ performance eligibility |
 | `packages/core/src/dom-capture.ts` | promotion guards |
 | `apps/web/components/optimization-view.tsx` | decision ledger/UI |
 | `apps/web/components/report-studio-view.tsx` | report UI |
@@ -500,6 +555,17 @@ cmd.exe /d /c "npm run db:restore -- backups\FILE.dump"
 7. Add Campaign Draft Composer
 8. Run real-account 100–300 Ads and multi-device tests
 9. Enable automation only after approval/readback/rollback pass
+
+Completed after the original next-order list:
+
+- command/collection receipt contract and live verification
+- split trusted report-input browser tests by concern
+- account-level client grants and read-only multi-account load smoke
+- guided simple-mode UI with advanced-tool disclosure
+- shared exclusion of billing-error and disabled Ads from every performance
+  median/ranking/recommendation path
+- Optimization Workspace filters stored recommendations against the current
+  job/scope/source-key evaluation so old advice cannot survive an analysis change
 
 ## 18. Non-negotiable completion criteria
 

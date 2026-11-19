@@ -3,6 +3,10 @@ import {
   type AdRecord,
   type ImportReconciliation,
 } from "./index";
+import {
+  nonPerformanceDeliveries,
+  parseDelivery,
+} from "./delivery-status";
 export type AnalysisGoal = "messages" | "sales" | "leads";
 export type AnalysisSource = "csv" | "dom_capture" | "unknown";
 export type AnalysisScopeCoverage = "verified_for_import" | "unverified";
@@ -382,6 +386,9 @@ export function buildAnalysis(
         ...r.missing,
         ...(summary.blocked ? ["group_quality_blocked"] : []),
         ...(overlappingRows.has(r.key) ? ["overlapping_interval"] : []),
+        ...(nonPerformanceDeliveries.has(parseDelivery(r.status))
+          ? ["performance_excluded_delivery_status"]
+          : []),
         ...(r.reported.spend !== null && r.reported.spend <= 0
           ? ["nonpositive_spend"]
           : []),
@@ -420,6 +427,10 @@ export function buildAnalysis(
       if (blockers.length) {
         status = "blocked";
         reasons.push("หลักฐานยังไม่พร้อมสำหรับคำแนะนำเปรียบเทียบ");
+        if (blockers.includes("performance_excluded_delivery_status"))
+          next_steps.unshift(
+            "Ads นี้ปิดใช้งานหรือมีข้อผิดพลาดการชำระเงิน จึงแสดงเป็นข้อมูลวินิจฉัยและไม่ถูกนำไปคิดค่ากลางหรืออันดับประสิทธิภาพ",
+          );
         next_steps.unshift(
           "ตรวจคอลัมน์ที่ขาด บริบทรายงาน และข้อมูลซ้ำหรือช่วงวันที่ทับซ้อน แล้วนำเข้ารายงานที่ตรวจยอดกับต้นทางแล้ว",
         );
@@ -476,7 +487,7 @@ export function buildAnalysis(
             "ติดตามต้นทุนและคุณภาพผลลัพธ์ในช่วงเวลาถัดไปภายใต้เงื่อนไขเดิม",
           );
       }
-      if (/payment|ชำระเงิน/i.test(r.status ?? ""))
+      if (parseDelivery(r.status) === "payment_error")
         next_steps.unshift(
           "ตรวจข้อผิดพลาดการชำระเงินใน Meta เพราะมีผลต่อการนำส่ง แยกจากผลประเมินต้นทุนย้อนหลัง",
         );

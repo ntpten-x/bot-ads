@@ -2,7 +2,7 @@
 
 Chrome Extension สำหรับอ่านข้อมูลและควบคุม Meta Business Suite / Ads Manager ผ่านหน้าเว็บ + Backend รับคำสั่งบอทในเครื่อง + PostgreSQL
 
-**สถานะ:** source/build Extension 0.6.47 รองรับ one-click `report.collect` พร้อม fast refresh, job-level materialization, paged export, daily trend aggregation, CSV และรายงาน Ads แบบ manual-first ระบบยืนยัน coverage ได้เฉพาะ scope ที่มีหลักฐานครบ ไม่ได้แปลว่าครบทั้งบัญชีหรือมีการสร้าง/เผยแพร่โฆษณาจริง
+**สถานะ:** source/build Extension 0.6.70 รองรับ one-click `report.collect` พร้อม fast refresh, receipt แยก command/collection, job-level materialization, paged export, daily trend aggregation, CSV และรายงาน Ads แบบ manual-first ระบบยืนยัน coverage ได้เฉพาะ scope ที่มีหลักฐานครบ ไม่ได้แปลว่าครบทั้งบัญชีหรือมีการสร้าง/เผยแพร่โฆษณาจริง
 
 **สำหรับ AI ที่ทำงานต่อ:** เริ่มอ่าน [AGENTS.md](AGENTS.md) และ [คู่มือส่งต่องานและรูปแบบการพัฒนา](docs/AI_HANDOFF.md) ซึ่งรวมโครงสร้างระบบ วิธีรัน ข้อกำหนดข้อมูล วิธีทดสอบ และงานค้าง
 
@@ -36,7 +36,12 @@ npm run dev:web
 
 หน้า `/#optimization` เป็น Optimization Loop สำหรับสร้างข้อเสนอจาก Ads scope ที่ coverage complete, ตรวจ Evidence/Confidence/Risk, ตั้ง Policy, สร้างแผนอนุมัติ, บันทึก Experiment, Creative metadata, Campaign template, Rollback/Receipt และติดตามผลจาก Capture ล่าสุด. Action mutation ยังปิดอยู่จนกว่าจะมี certified Extension adapter และ local approval รายละเอียดที่ [OPTIMIZATION.md](docs/OPTIMIZATION.md)
 
-หน้า `/#accounts` ใช้จัดการ Customer/Account mapping, ตรวจ acceptance, เปิด/ปิด Customer หรือบัญชี, กำหนดการอ่าน Ads อัตโนมัติแบบ read-only, เพิกถอน client token และดู audit trail. API client ถูกจำกัดเฉพาะบัญชีของ Customer ตน; แม้เป็น `admin` ของ Customer ก็เห็นเฉพาะ Customer ของตน และ `viewer` เป็น read-only. Extension หนึ่ง Device ยังผูกทีละบัญชี จึงต้องใช้หลาย Device/Chrome Profile เมื่อต้องเก็บหลายบัญชีพร้อมกัน
+ระบบแยกข้อมูล Ads เป็น catalog, daily/monthly performance, creative versions
+และ raw capture ตามอายุ โดย raw snapshot ที่ยังไม่ผ่าน review จะไม่ถูกลบ
+อัตโนมัติ ตรวจแผนด้วย `npm run data:lifecycle` และอ่านรายละเอียดที่
+[DATA_LIFECYCLE.md](docs/DATA_LIFECYCLE.md)
+
+หน้า `/#accounts` ใช้จัดการ Customer/Account mapping, Account-level access ต่อ Client Token, ตรวจ acceptance, เปิด/ปิด Customer หรือบัญชี, กำหนดการอ่าน Ads อัตโนมัติแบบ read-only, เพิกถอน client token และดู audit trail. Token ใหม่เลือกได้ว่าจะเห็นทุกบัญชีใน Customer หรือเฉพาะบาง Account; แม้เป็น `admin` ของ Customer ก็เห็นเฉพาะ Customer ของตน และ `viewer` เป็น read-only. Extension หนึ่ง Device ยังผูกทีละบัญชี จึงต้องใช้หลาย Device/Chrome Profile เมื่อต้องเก็บหลายบัญชีพร้อมกัน
 
 หากเพิ่งอัปเดตเวอร์ชัน ให้รัน `npm ci` และ `npm run build` ใน CMD ก่อน แล้วรีสตาร์ต Backend และ Reload Extension เพื่อใช้ dashboard endpoints และสถานะอนุมัติรุ่นใหม่
 
@@ -132,6 +137,8 @@ npm run test:captures
 npm run check:live-report
 npm run test:accounts-web
 npm run test:optimization-web
+npm run test:simple-mode
+npm run check:accounts-load
 npm run test:reader
 npx playwright install chromium
 npm run test:browser

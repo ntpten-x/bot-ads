@@ -13,9 +13,14 @@ import {
   type RowEvaluation,
 } from "../../../packages/core/src/dom-capture.js";
 import { recordKey, type AdRecord } from "../../../packages/core/src/index.js";
-import { analyzeCaptureJob } from "../../../packages/core/src/capture-analysis.js";
+import {
+  analyzeCaptureJob,
+  captureAnalysisVersion,
+} from "../../../packages/core/src/capture-analysis.js";
+import { parseDelivery } from "../../../packages/core/src/delivery-status.js";
 import { reconcileDomWithCsv } from "../../../packages/core/src/reconciliation.js";
 import { assertManagedAccountEnabled } from "./accounts.js";
+import { operatorContextKey } from "./report-cache.js";
 
 /**
  * Persistence for Extension DOM captures. Every snapshot reported by the
@@ -194,13 +199,6 @@ function snapshotStatus(
   };
 }
 
-const operatorContextKey = (operator: OperatorContext) =>
-  JSON.stringify(
-    Object.entries(operator)
-      .filter(([, value]) => value !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right)),
-  );
-
 /** Evaluate rows of a stored snapshot and promote the ready ones. Already promoted rows are kept. */
 async function reviewStored(
   client: PoolClient,
@@ -208,11 +206,11 @@ async function reviewStored(
   operator?: OperatorContext,
 ) {
   const s = await client.query(
-    "SELECT fingerprint,bound_account,page,raw FROM capture_snapshots WHERE id=$1 FOR UPDATE",
+    "SELECT fingerprint,bound_account,page,raw,job_id FROM capture_snapshots WHERE id=$1 FOR UPDATE",
     [snapshotId],
   );
   if (!s.rowCount) return null;
-  const { fingerprint, bound_account, page, raw } = s.rows[0];
+  const { fingerprint, bound_account, page, raw, job_id } = s.rows[0];
   const parsed = domSnapshotSchema.safeParse(raw);
   const existing = await client.query(
     "SELECT row_index,review_status FROM capture_rows WHERE snapshot_id=$1",
@@ -255,6 +253,16 @@ async function reviewStored(
     ready,
   );
   const level = captureLevel(snapshot.page);
+  const catalogLevel =
+    level === "campaigns" ? "campaign" : level === "adsets" ? "adset" : "ad";
+  const statusText = (cells: { header: string; text: string }[]) => {
+    const value = cells.find((cell) =>
+      /^(?:ad delivery|delivery|status|การแสดงโฆษณา|สถานะ)$/i.test(
+        cell.header.trim(),
+      ),
+    )?.text;
+    return value?.split("\n")[0]?.trim() || null;
+  };
   const stored: { review_status: string; review_reasons: string[] }[] = [];
   for (const [index, row] of snapshot.row_observations.entries()) {
     if (done.has(index)) {
@@ -295,6 +303,61 @@ async function reviewStored(
         p?.job ?? null,
       ],
     );
+    if (e.entity_id) {
+      const statusRaw = statusText(row.cells);
+      const delivery = statusRaw ? parseDelivery(statusRaw) : null;
+      await client.query(
+        `WITH previous AS (
+           SELECT account_id,level,entity_id,status_raw
+           FROM ad_catalog
+           WHERE account_id=$1 AND level=$2 AND entity_id=$3
+         ),
+         upserted AS (
+           INSERT INTO ad_catalog(
+             account_id,level,entity_id,parent_ids,name,status_raw,delivery,
+             first_seen_at,last_seen_at,first_job_id,last_job_id,last_context
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8,$9,$9,$10)
+           ON CONFLICT(account_id,level,entity_id) DO UPDATE SET
+             parent_ids=CASE WHEN excluded.last_seen_at >= ad_catalog.last_seen_at
+               THEN excluded.parent_ids ELSE ad_catalog.parent_ids END,
+             name=CASE WHEN excluded.last_seen_at >= ad_catalog.last_seen_at
+               THEN COALESCE(excluded.name,ad_catalog.name) ELSE ad_catalog.name END,
+             status_raw=CASE WHEN excluded.last_seen_at >= ad_catalog.last_seen_at
+               THEN COALESCE(excluded.status_raw,ad_catalog.status_raw) ELSE ad_catalog.status_raw END,
+             delivery=CASE WHEN excluded.last_seen_at >= ad_catalog.last_seen_at
+               THEN COALESCE(excluded.delivery,ad_catalog.delivery) ELSE ad_catalog.delivery END,
+             last_context=CASE WHEN excluded.last_seen_at >= ad_catalog.last_seen_at
+               THEN excluded.last_context ELSE ad_catalog.last_context END,
+             first_seen_at=LEAST(ad_catalog.first_seen_at,excluded.first_seen_at),
+             last_seen_at=GREATEST(ad_catalog.last_seen_at,excluded.last_seen_at),
+             first_job_id=COALESCE(ad_catalog.first_job_id,excluded.first_job_id),
+             last_job_id=CASE WHEN excluded.last_seen_at >= ad_catalog.last_seen_at
+               THEN excluded.last_job_id ELSE ad_catalog.last_job_id END
+           RETURNING account_id,level,entity_id,status_raw,delivery
+         )
+         INSERT INTO ad_status_history(
+           account_id,level,entity_id,status_raw,delivery,observed_at,job_id
+         )
+         SELECT
+           u.account_id,u.level,u.entity_id,u.status_raw,u.delivery,$8,$9
+         FROM upserted u
+         LEFT JOIN previous p USING(account_id,level,entity_id)
+         WHERE u.status_raw IS NOT NULL
+           AND (p.status_raw IS NULL OR p.status_raw IS DISTINCT FROM u.status_raw)`,
+        [
+          snapshot.account_id,
+          catalogLevel,
+          e.entity_id,
+          JSON.stringify(row.parent_ids ?? {}),
+          row.name,
+          statusRaw,
+          delivery,
+          snapshot.captured_at,
+          job_id,
+          JSON.stringify(snapshot.reporting_context ?? {}),
+        ],
+      );
+    }
   }
   const summary = snapshotStatus(stored);
   await client.query(
@@ -347,14 +410,19 @@ async function reviewStoredJob(
     operator: operator ?? {},
   });
   await client.query(
-    `INSERT INTO capture_job_reports(job_id,context_key,operator_context,analysis)
-     VALUES($1,$2,$3,$4)
-     ON CONFLICT(job_id,context_key) DO UPDATE SET analysis=excluded.analysis,operator_context=excluded.operator_context,updated_at=now()`,
+    `INSERT INTO capture_job_reports(job_id,context_key,operator_context,analysis,analyzer_version)
+     VALUES($1,$2,$3,$4,$5)
+     ON CONFLICT(job_id,context_key) DO UPDATE SET
+       analysis=excluded.analysis,
+       operator_context=excluded.operator_context,
+       analyzer_version=excluded.analyzer_version,
+       updated_at=now()`,
     [
       jobId,
       operatorContextKey(operator ?? {}),
       JSON.stringify(operator ?? {}),
       JSON.stringify(analysis),
+      captureAnalysisVersion,
     ],
   );
   const status =
@@ -517,8 +585,8 @@ export function captureRoutes(pool: Pool) {
         [account],
       ),
       pool.query(
-        "SELECT analysis,updated_at FROM capture_job_reports WHERE job_id=$1 AND context_key=$2",
-        [job, operatorKey],
+        "SELECT analysis,updated_at FROM capture_job_reports WHERE job_id=$1 AND context_key=$2 AND analyzer_version=$3",
+        [job, operatorKey, captureAnalysisVersion],
       ),
     ]);
     if (!meta.rowCount) {
@@ -545,10 +613,20 @@ export function captureRoutes(pool: Pool) {
       .map((p) => p.data!);
     const analysis = analyzeCaptureJob(snapshots, { operator });
     await pool.query(
-      `INSERT INTO capture_job_reports(job_id,context_key,operator_context,analysis)
-       VALUES($1,$2,$3,$4)
-       ON CONFLICT(job_id,context_key) DO UPDATE SET analysis=excluded.analysis,operator_context=excluded.operator_context,updated_at=now()`,
-      [job, operatorKey, JSON.stringify(operator), JSON.stringify(analysis)],
+      `INSERT INTO capture_job_reports(job_id,context_key,operator_context,analysis,analyzer_version)
+       VALUES($1,$2,$3,$4,$5)
+       ON CONFLICT(job_id,context_key) DO UPDATE SET
+         analysis=excluded.analysis,
+         operator_context=excluded.operator_context,
+         analyzer_version=excluded.analyzer_version,
+         updated_at=now()`,
+      [
+        job,
+        operatorKey,
+        JSON.stringify(operator),
+        JSON.stringify(analysis),
+        captureAnalysisVersion,
+      ],
     );
     res.json({
       job: meta.rows[0],

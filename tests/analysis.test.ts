@@ -389,6 +389,33 @@ test("evaluation compares explicit goal cost only within compatible reporting an
     isolated.rows.every((r) => r.evaluation?.status === "insufficient_peers"),
   );
 });
+
+test("disabled and billing-error Ads remain visible but are excluded from performance comparison", () => {
+  const report = buildAnalysis([
+    evaluatedRecord("401", 50, 10),
+    evaluatedRecord("402", 100, 10),
+    evaluatedRecord("403", 150, 10),
+    {
+      ...evaluatedRecord("404", 1, 10),
+      status: "ปิดใช้งานอยู่",
+    },
+    {
+      ...evaluatedRecord("405", 2, 10),
+      status: "ข้อผิดพลาดในการชำระเงิน",
+    },
+  ]);
+  assert.equal(report.evaluation_groups[0].eligible_ads, 3);
+  assert.equal(report.evaluation_groups[0].median_cost_per_conversion, 10);
+  for (const row of report.rows.slice(3)) {
+    assert.equal(row.evaluation.status, "blocked");
+    assert.ok(
+      row.evaluation.blockers.includes("performance_excluded_delivery_status"),
+    );
+  }
+  assert.equal(report.rows[0].evaluation.status, "lower_cost");
+  assert.equal(report.rows[1].evaluation.status, "typical_cost");
+  assert.equal(report.rows[2].evaluation.status, "higher_cost");
+});
 test("evaluation distinguishes missing conversions, measured zero, low sample and zero-spend data", () => {
   for (const goal of ["messages", "sales", "leads"] as const) {
     const zero = evaluatedRecord("301", 100, 0);

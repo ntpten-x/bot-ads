@@ -90,6 +90,8 @@ try {
                         name: "Operator A",
                         role: "operator",
                         enabled: true,
+                        all_accounts: true,
+                        account_ids: [],
                         created_at: new Date().toISOString(),
                       },
                     ]
@@ -150,11 +152,13 @@ try {
   await page.goto("http://127.0.0.1:9321/?account=123456789#accounts");
   await expect(
     page.getByRole("heading", {
-      name: "บัญชีโฆษณาและความพร้อม",
+      name: "บัญชีและอุปกรณ์",
       level: 1,
     }),
   ).toBeVisible();
-  await expect(page.getByText("Brand A", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("table").getByText("Brand A", { exact: true }),
+  ).toBeVisible();
   await expect(
     page.getByRole("table").getByText("พร้อมบางส่วน", { exact: true }),
   ).toBeVisible();
@@ -168,6 +172,11 @@ try {
     .getByText("จัดการ Customer, บัญชี และ Client Token")
     .click();
   await expect(page.getByText("Operator A", { exact: true })).toBeVisible();
+  await expect(
+    page
+      .locator(".client-token-list")
+      .getByText("ทุกบัญชีใน Customer", { exact: false }),
+  ).toBeVisible();
   await page
     .getByText("ประวัติการเปลี่ยนสิทธิ์และการอ่านอัตโนมัติ")
     .click();

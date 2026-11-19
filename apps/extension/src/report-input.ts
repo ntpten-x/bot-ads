@@ -1,5 +1,5 @@
 import { getReportFields, type ReportField } from "./report-columns.js";
-import { probeReportingScroll } from "./reader.js";
+import { probeReportingPage, probeReportingScroll } from "./reader.js";
 import {
   probeReportTarget,
   type ReportProbeOptions,
@@ -174,6 +174,7 @@ export async function scrollReportColumnsWithInput(
       [
         "report_input_lease_required",
         "reporting_context_changed",
+        "collection_context_changed",
         "reporting_input_timeout",
         "collection_context_changed",
         "debugger_attach_timeout",
@@ -573,7 +574,6 @@ export async function scrollReportWithInput(
     // allowed only after the view proves stable across consecutive probes.
     let baseline = before;
     let settledSignature = before.signature;
-    let settled = false;
     const settleUntil = Math.min(deadline, Date.now() + 1600);
     do {
       await new Promise((resolve) => setTimeout(resolve, 150));
@@ -585,16 +585,14 @@ export async function scrollReportWithInput(
         );
       baseline = observed;
       if (observed.signature === settledSignature) {
-        settled = true;
         break;
       }
       settledSignature = observed.signature;
     } while (Date.now() < settleUntil);
-    if (!settled)
-      return stopped(
-        "reporting_view_changed_before_input",
-        diagnostics(baseline),
-      );
+    // Live report data can repaint while IDs, target bands and the scrollbar
+    // remain stable. The input point is re-probed below immediately before
+    // every wheel/drag, so a continuously changing metric signature alone must
+    // not block read-only paging.
     const planned = baseline;
     type ReadyObservation = Extract<ScrollObservation, { ready: true }>;
     type ScrollbarDragResult =
@@ -618,13 +616,6 @@ export async function scrollReportWithInput(
         return {
           stop: stopped(
             hovered?.reason ?? "no_reporting_observation",
-            diagnostics(hovered),
-          ),
-        };
-      if (hovered.signature !== observation.signature)
-        return {
-          stop: stopped(
-            "reporting_view_changed_before_input",
             diagnostics(hovered),
           ),
         };
@@ -675,7 +666,7 @@ export async function scrollReportWithInput(
               diagnostics(after),
             ),
           };
-        if (introducedRows(baseline, after))
+        if (introducedRows(hovered, after))
           return { moved: true as const, observation: after };
         last = after;
       } while (Date.now() < observeUntil);
@@ -717,17 +708,8 @@ export async function scrollReportWithInput(
           hovered?.reason ?? "no_reporting_observation",
           diagnostics(hovered),
         );
-      if (introducedRows(baseline, hovered))
-        return attempted.length
-          ? {
-              moved: true as const,
-              method: "native_wheel" as const,
-              target_diagnostics: diagnostics(hovered),
-            }
-          : stopped(
-              "reporting_view_changed_before_input",
-              diagnostics(hovered),
-            );
+      // Hover may repaint a virtualized pane. Treat the current hover
+      // observation as the immutable baseline for this one input.
       // Meta can reveal its custom scrollbar only after the pointer enters the
       // grid gutter. Re-probe after hover and drag the newly visible thumb
       // before consuming this target as a wheel.
@@ -794,7 +776,7 @@ export async function scrollReportWithInput(
             candidate.column_kind === point.column_kind,
         );
         independentBodyMovement ||= bodyMoved(point, afterTarget);
-        if (introducedRows(baseline, after)) {
+        if (introducedRows(hovered, after)) {
           entry.outcome = "moved";
           return {
             moved: true as const,
@@ -841,6 +823,176 @@ export async function scrollReportWithInput(
     if (attached) await detachDebugger(source);
   }
 }
+export async function advanceReportPageWithInput(
+  binding: Binding & { jobId: string },
+) {
+  if (!binding.enabled) return { paged: false as const, reason: "bot_control_disabled" };
+  const source = { tabId: binding.tabId };
+  const deadline = Date.now() + 20_000;
+  let attached = false;
+  const guard = async () => {
+    const { reportInputLease } =
+      await chrome.storage.session.get("reportInputLease");
+    const lease = reportInputLease as
+      | { tabId?: number; account?: string; expires_at?: number }
+      | undefined;
+    if (
+      Date.now() >= deadline ||
+      !lease ||
+      lease.tabId !== binding.tabId ||
+      lease.account !== binding.account ||
+      typeof lease.expires_at !== "number" ||
+      lease.expires_at <= Date.now()
+    )
+      throw new Error("report_input_lease_required");
+    const tab = await chrome.tabs.get(binding.tabId);
+    const u = new URL(tab.url ?? "");
+    if (
+      !tab.active ||
+      u.protocol !== "https:" ||
+      u.port ||
+      !["adsmanager.facebook.com", "business.facebook.com"].includes(u.hostname) ||
+      !/^\/adsmanager\/manage\/(campaigns|adsets|ads)\/?$/.test(u.pathname) ||
+      u.searchParams.get("act") !== binding.account
+    )
+      throw new Error("reporting_context_changed");
+    const current = await chrome.storage.local.get(["bridge", "job"]);
+    const bridge = current.bridge as Partial<Binding> | undefined;
+    const job = current.job as
+      | { id?: string; status?: string; tabId?: number; account?: string }
+      | undefined;
+    if (
+      !bridge?.enabled ||
+      bridge.tabId !== binding.tabId ||
+      bridge.account !== binding.account ||
+      job?.id !== binding.jobId ||
+      job.status !== "running" ||
+      job.tabId !== binding.tabId ||
+      job.account !== binding.account
+    )
+      throw new Error("collection_context_changed");
+  };
+  const observe = async () => {
+    await guard();
+    const [result] = await chrome.scripting.executeScript({
+      target: source,
+      func: probeReportingPage,
+      args: [binding.account],
+    });
+    return result?.result;
+  };
+  const observeRows = async () => {
+    await guard();
+    const [result] = await chrome.scripting.executeScript({
+      target: source,
+      func: probeReportingScroll,
+      args: [binding.account],
+    });
+    return result?.result;
+  };
+  try {
+    const before = await observe();
+    if (!before?.ready)
+      return {
+        paged: false as const,
+        reason: before?.reason ?? "no_reporting_page",
+      };
+    if (!before.next)
+      return {
+        paged: false as const,
+        reason: before.reason ?? "next_page_unavailable",
+        page: before.page,
+      };
+    await guard();
+    await attachDebugger(source);
+    attached = true;
+    await guard();
+    await sendDebugger(source, "Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: before.next.x,
+      y: before.next.y,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const hovered = await observe();
+    if (!hovered?.ready || !hovered.next)
+      return {
+        paged: false as const,
+        reason: hovered?.reason ?? "next_page_unavailable",
+        page: before.page,
+      };
+    if (
+      Math.abs(hovered.next.x - before.next.x) > 2 ||
+      Math.abs(hovered.next.y - before.next.y) > 2
+    )
+      return { paged: false as const, reason: "next_page_target_changed" };
+    const rowsBefore = await observeRows();
+    if (!rowsBefore?.ready)
+      return {
+        paged: false as const,
+        reason: rowsBefore?.reason ?? "next_page_rows_unavailable",
+      };
+    await guard();
+    for (const type of ["mousePressed", "mouseReleased"] as const) {
+      await sendDebugger(source, "Input.dispatchMouseEvent", {
+        type,
+        x: hovered.next.x,
+        y: hovered.next.y,
+        button: "left",
+        buttons: type === "mousePressed" ? 1 : 0,
+        clickCount: 1,
+      });
+      await guard();
+    }
+    const until = Math.min(deadline, Date.now() + 8_000);
+    let pageChanged = false;
+    do {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const after = await observe();
+      if (after?.ready && after.signature !== before.signature)
+        pageChanged = true;
+      if (pageChanged) {
+        const rows = await observeRows();
+        if (
+          rows?.ready &&
+          rows.row_fingerprints.some(
+            (fingerprint) =>
+              fingerprint &&
+              !rowsBefore.row_fingerprints.includes(fingerprint),
+          )
+        )
+          return {
+            paged: true as const,
+            method: "native_click" as const,
+            page: after?.page ?? before.page,
+            signature: after?.signature ?? null,
+          };
+      }
+    } while (Date.now() < until);
+    return {
+      paged: false as const,
+      reason: pageChanged
+        ? "reporting_page_rows_not_ready"
+        : "reporting_page_unchanged",
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "reporting_input_failed";
+    return {
+      paged: false as const,
+      reason: [
+        "report_input_lease_required",
+        "reporting_context_changed",
+        "debugger_attach_timeout",
+        "debugger_command_timeout",
+        "debugger_detach_timeout",
+      ].includes(reason)
+        ? reason
+        : "native_next_page_failed",
+    };
+  } finally {
+    if (attached) await detachDebugger(source);
+  }
+}
+
 export async function prepareReportWithInput(
   binding: Binding,
   goal: "messages" | "sales" | "leads",
@@ -1468,7 +1620,10 @@ export async function prepareReportWithInput(
     attached = true;
     phase = "inspect_table";
     const initialHeaders = await probe("table_headers");
-    if (options.reuseIfReady) {
+    const dialogClosed = options.reuseIfReady
+      ? await probe("closed")
+      : null;
+    if (options.reuseIfReady && dialogClosed?.kind === "done") {
       const headers = initialHeaders.headers ?? [];
       const missingRendered = fields
         .filter(
@@ -1516,22 +1671,30 @@ export async function prepareReportWithInput(
         };
       }
     }
-    const menu = await wait(
-      "menu",
-      (candidate) => candidate.kind === "click" || candidate.kind === "done",
-      15000,
-    );
-    if (menu.kind !== "click" && menu.kind !== "done")
-      throw new Error(menu.reason ?? "Report menu not ready");
-    if (menu.kind === "click") await click("menu");
-    let dialog = await wait(
-      "dialog",
-      (p) => p.kind === "click" || p.kind === "done",
-      10000,
-    );
-    if (dialog.kind === "click") {
-      await click("dialog");
+    let dialog: ReportProbe;
+    if (dialogClosed?.kind === "wait") {
+      // An already-open customization dialog blocks the Columns trigger
+      // underneath it. Reuse the open dialog instead of clicking the blocked
+      // control again.
       dialog = await wait("dialog", (p) => p.kind === "done", 6000);
+    } else {
+      const menu = await wait(
+        "menu",
+        (candidate) => candidate.kind === "click" || candidate.kind === "done",
+        15000,
+      );
+      if (menu.kind !== "click" && menu.kind !== "done")
+        throw new Error(menu.reason ?? "Report menu not ready");
+      if (menu.kind === "click") await click("menu");
+      dialog = await wait(
+        "dialog",
+        (p) => p.kind === "click" || p.kind === "done",
+        10000,
+      );
+      if (dialog.kind === "click") {
+        await click("dialog");
+        dialog = await wait("dialog", (p) => p.kind === "done", 6000);
+      }
     }
     if (dialog.kind !== "done")
       throw new Error("ไม่พบหน้าต่างปรับแต่งคอลัมน์ที่พร้อมใช้งาน");

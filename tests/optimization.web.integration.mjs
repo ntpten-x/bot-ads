@@ -16,7 +16,7 @@ const recommendation = {
   account_id: account,
   job_id: "00000000-0000-4000-8000-000000000104",
   scope_key: "fixture-scope",
-  entity_id: "120251975551660544",
+  entity_id: "900000000000000001",
   action: "pause_candidate",
   title: "ตรวจสอบก่อนหยุด Ads ที่ต้นทุนสูง",
   rationale: "ต้นทุนต่อผลลัพธ์สูงกว่าค่ากลาง 45%",
@@ -95,7 +95,7 @@ function workspace() {
       {
         ...recommendation,
         id: "00000000-0000-4000-8000-000000000106",
-        entity_id: "120251975200330544",
+        entity_id: "900000000000000002",
         action: "duplicate_winner",
         title: "โคลนผู้ชนะไปทดสอบในชุดใหม่",
         evidence: {
@@ -127,7 +127,7 @@ function workspace() {
     creatives: [
       {
         id: "00000000-0000-4000-8000-000000000107",
-        ad_id: "120251975200330544",
+        ad_id: "900000000000000002",
         asset_type: "copy",
         title: "Fixture winner Ad",
         body: "Message us today",
@@ -283,6 +283,7 @@ try {
   await page.addInitScript((value) => {
     sessionStorage.setItem("collectorToken", "fixture-only");
     localStorage.setItem("collectorAccount", value);
+    localStorage.setItem("collectorAdvancedMode", "true");
     localStorage.setItem(
       "collectorDevice",
       "00000000-0000-4000-8000-000000000109",
@@ -290,17 +291,22 @@ try {
   }, account);
   await page.goto(`http://127.0.0.1:9321/?account=${account}#optimization`);
   await expect(
-    page.getByRole("heading", { name: "Optimization และการทดลอง", level: 1 }),
+    page.getByRole("heading", { name: "สิ่งที่ควรทำกับโฆษณา", level: 1 }),
   ).toBeVisible();
-  await expect(page.getByText("Decision ledger", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("สิ่งที่ควรทำตอนนี้", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("Fixture expensive Ad", { exact: true })).toBeVisible();
   await expect(page.getByText("78% confidence", { exact: true })).toBeVisible();
   await page
-    .getByRole("button", { name: "สร้างข้อเสนอจาก Capture ล่าสุด" })
+    .getByRole("button", { name: "สร้างข้อเสนอใหม่" })
     .click();
   await expect.poll(() => writes.some((item) => item.path.endsWith("/rebuild")))
     .toBe(true);
-  await page.getByRole("button", { name: "สร้างแผน", exact: true }).first().click();
+  await page
+    .getByRole("button", { name: "สร้างแผนดำเนินการ", exact: true })
+    .first()
+    .click();
   await expect.poll(() => writes.some((item) => item.path.endsWith("/plan")))
     .toBe(true);
   await page.getByRole("button", { name: "อนุมัติแผน", exact: true }).click();

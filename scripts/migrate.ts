@@ -20,6 +20,9 @@ try {
     "009_operations_hardening",
     "010_optimization_loop",
     "011_experiment_observations",
+    "012_account_level_access",
+    "013_report_analysis_version",
+    "014_data_lifecycle",
   ]) {
     const { rowCount } = await client.query(
       "SELECT 1 FROM schema_migrations WHERE name=$1",

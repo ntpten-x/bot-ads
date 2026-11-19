@@ -2,10 +2,38 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   botCommandSchema,
+  commandResultSchema,
   needsReportingNavigation,
   reportingUrl,
   suiteUrl,
 } from "../packages/core/src/control.js";
+test("command receipts distinguish accepted commands from active collection", () => {
+  const jobId = "00000000-0000-4000-8000-000000000001";
+  const parsed = commandResultSchema.parse({
+    ok: true,
+    job: { id: jobId, status: "running" },
+    collection: {
+      phase: "collection_started",
+      active: true,
+      job_id: jobId,
+      job_status: "running",
+    },
+  });
+  assert.equal(parsed.collection?.active, true);
+  assert.equal(parsed.collection?.phase, "collection_started");
+  assert.equal(
+    commandResultSchema.safeParse({
+      ok: true,
+      collection: {
+        phase: "collection_started",
+        active: true,
+        job_id: "not-a-uuid",
+        job_status: "running",
+      },
+    }).success,
+    false,
+  );
+});
 test("accept typed UI commands and refuse JS, selectors and remote approvals", () => {
   assert.equal(
     botCommandSchema.safeParse({
@@ -172,4 +200,15 @@ test("reuse an already-applied reporting view without reloading Meta", () => {
       needsReportingNavigation(raw, account, level, params),
       true,
     );
+});
+
+test("stale report pagination always returns to the first page before a new job", () => {
+  assert.equal(
+    needsReportingNavigation(
+      "https://adsmanager.facebook.com/adsmanager/manage/ads?act=123456789&ad_page_id=3",
+      "123456789",
+      "ads",
+    ),
+    true,
+  );
 });

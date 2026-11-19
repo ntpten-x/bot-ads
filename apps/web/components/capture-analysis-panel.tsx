@@ -315,6 +315,19 @@ export default function CaptureAnalysisPanel({
                   ? "ยังไม่ยืนยัน"
                   : JSON.stringify(l.context.filters)}
               </p>
+              {Object.keys(l.performance_excluded_counts).length ? (
+                <p className="small muted">
+                  ไม่นับในการประเมินประสิทธิภาพ:{" "}
+                  {Object.entries(l.performance_excluded_counts)
+                    .map(
+                      ([delivery, count]) =>
+                        `${deliveryNames[delivery as Delivery]} ${count}`,
+                    )
+                    .join(" · ")}{" "}
+                  — เก็บไว้เป็นข้อมูลวินิจฉัยเท่านั้น ไม่มีผลต่อผลรวม
+                  ค่ากลาง อันดับ หรือคำแนะนำ
+                </p>
+              ) : null}
               {l.blockers.length ? (
                 <Note>
                   ยังใช้ตัดสินใจไม่ได้: {l.blockers.map(blockerText).join(" · ")}

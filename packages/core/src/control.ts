@@ -140,6 +140,25 @@ export const botCommandSchema = z.union([
   z.object({ command: z.literal("status") }).strict(),
   uiCommandSchema,
 ]);
+export const commandCollectionSchema = z
+  .object({
+    phase: z.enum(["collection_started", "collection_completed", "collection_failed"]),
+    active: z.boolean(),
+    job_id: z.uuid().nullable(),
+    job_status: z.string().max(40).nullable(),
+  })
+  .strict();
+export const commandResultSchema = z
+  .object({
+    ok: z.boolean(),
+    error: z.string().max(4000).optional(),
+    job: z.unknown().optional(),
+    ui: z.unknown().optional(),
+    collection: commandCollectionSchema.optional(),
+  })
+  .passthrough();
+export type CommandCollection = z.infer<typeof commandCollectionSchema>;
+export type CommandResult = z.infer<typeof commandResultSchema>;
 export type BreakdownQueryParam = readonly [string, string];
 export type ReportingLevel = "campaigns" | "adsets" | "ads";
 export function reportingUrl(
@@ -192,7 +211,8 @@ export function needsReportingNavigation(
     ) ||
     url.pathname.replace(/\/+$/, "") !== expected.pathname ||
     url.searchParams.getAll("act").length !== 1 ||
-    url.searchParams.get("act") !== account
+    url.searchParams.get("act") !== account ||
+    url.searchParams.has("ad_page_id")
   )
     return true;
   const actualBreakdown: BreakdownQueryParam[] = [];

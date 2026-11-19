@@ -9,6 +9,20 @@ import {
   type DomSnapshot,
   type OperatorContext,
 } from "./dom-capture";
+import {
+  nonPerformanceDeliveries,
+  parseDelivery,
+  type Delivery,
+} from "./delivery-status";
+
+export {
+  nonPerformanceDeliveries,
+  parseDelivery,
+  type Delivery,
+} from "./delivery-status";
+
+/** Bump whenever cached analysis semantics change, so old cache rows are not reused. */
+export const captureAnalysisVersion = 2;
 
 /**
  * Deterministic performance analysis over Extension DOM captures.
@@ -24,40 +38,6 @@ import {
  * - uncertain identity, mapping or context blocks actionable comparisons.
  * Recommendations are suggestions for a human. Nothing here changes Meta.
  */
-
-export type Delivery =
-  | "payment_error"
-  | "parent_off"
-  | "off"
-  | "limited"
-  | "learning"
-  | "in_review"
-  | "rejected"
-  | "not_delivering"
-  | "completed"
-  | "active"
-  | "unknown";
-
-const deliveryRules: [RegExp, Delivery][] = [
-  [
-    /ข้อผิดพลาดในการชำระเงิน|payment (?:issue|error|failed|method)/i,
-    "payment_error",
-  ],
-  [/^(?:แคมเปญ|ชุดโฆษณา)ปิดอยู่$|^(?:campaign|ad set) (?:is )?off$/i, "parent_off"],
-  [/^(?:ปิด|ปิดอยู่|off|inactive)$/i, "off"],
-  [/จำกัดการเรียนรู้|learning limited/i, "limited"],
-  [/กำลังเรียนรู้|^learning$/i, "learning"],
-  [/ระหว่างการตรวจสอบ|อยู่ระหว่างตรวจสอบ|in review/i, "in_review"],
-  [/ถูกปฏิเสธ|rejected|disapproved/i, "rejected"],
-  [/ไม่ได้นำส่ง|ไม่มีการนำส่ง|not delivering/i, "not_delivering"],
-  [/เสร็จสมบูรณ์|^completed$/i, "completed"],
-  [/ใช้งานอยู่|^active$/i, "active"],
-];
-export function parseDelivery(text: string | null | undefined): Delivery {
-  const first = (text ?? "").split("\n")[0].trim();
-  if (!first || first === "—") return "unknown";
-  return deliveryRules.find(([re]) => re.test(first))?.[1] ?? "unknown";
-}
 
 const footerLine =
   /^(?:ผลลัพธ์จาก\s*(?:โฆษณา|แคมเปญ|ชุดโฆษณา)?\s*([\d,]+)|results from\s+([\d,]+))/i;
@@ -195,6 +175,7 @@ export type LevelAnalysis = {
   /** Counts confirmed entities only; unresolved evidence is separate below. */
   delivery_counts: Partial<Record<Delivery, number>>;
   delivery_observation_counts: Partial<Record<Delivery, number>>;
+  performance_excluded_counts: Partial<Record<Delivery, number>>;
   recommendations: Recommendation[];
   warnings: string[];
 };
@@ -852,7 +833,9 @@ export function analyzeCaptureLevel(
       "ตัวเลขจำนวนแถวท้ายรายงานเป็นยอดรวมทั้งรายงาน ไม่ใช่จำนวนรวมของกลุ่ม Breakdown นี้ ตัวเลขที่ยืนยันได้จึงเป็นขั้นต่ำและยังยืนยันความครบของกลุ่มย่อยไม่ได้",
     );
   // Excluding unresolved rows is conservative: aggregates below explicitly cover only verified compatible rows.
-  const comparable = contextReady ? verifiedRows : [];
+  const comparable = contextReady
+    ? verifiedRows.filter((row) => !nonPerformanceDeliveries.has(row.delivery))
+    : [];
   const groups = new Map<string, AnalyzedRow[]>();
   for (const r of comparable)
     if (r.results !== null && r.result_type)
@@ -909,24 +892,8 @@ export function analyzeCaptureLevel(
   // so it must not block or outrank results/spend/cost comparisons.
   // Comparisons against the median need at least three comparable rows.
   if (med !== null && eligible.length >= 3) {
-    const pausedWinners = eligible.filter(
-      (r) =>
-        (r.delivery === "off" || r.delivery === "parent_off") &&
-        r.cost_per_result! <= med,
-    );
-    if (pausedWinners.length)
-      recs.push({
-        severity: "opportunity",
-        code: "paused_low_cost",
-        message: `${name}ที่ปิดอยู่แต่ต้นทุนต่อผลลัพธ์ไม่เกินค่ากลาง (${baht(med, currency)}) พิจารณาเปิดใช้อีกครั้งหรือนำกลุ่มเป้าหมาย/ครีเอทีฟไปใช้ในตัวที่เปิดอยู่ (ผู้ใช้ตัดสินใจเอง บอทไม่เปลี่ยนสถานะ)`,
-        rows: pausedWinners.map(
-          (r) => `${label(r)} (${baht(r.cost_per_result, currency)})`,
-        ),
-      });
     const expensive = eligible.filter(
       (r) =>
-        r.delivery !== "off" &&
-        r.delivery !== "parent_off" &&
         r.cost_per_result! >= med * highRatio,
     );
     if (expensive.length)
@@ -1014,6 +981,11 @@ export function analyzeCaptureLevel(
   for (const r of rows)
     delivery_observation_counts[r.delivery] =
       (delivery_observation_counts[r.delivery] ?? 0) + r.occurrences;
+  const performance_excluded_counts: Partial<Record<Delivery, number>> = {};
+  for (const row of verifiedRows)
+    if (nonPerformanceDeliveries.has(row.delivery))
+      performance_excluded_counts[row.delivery] =
+        (performance_excluded_counts[row.delivery] ?? 0) + 1;
   return {
     scope_key,
     level,
@@ -1050,6 +1022,7 @@ export function analyzeCaptureLevel(
     },
     delivery_counts,
     delivery_observation_counts,
+    performance_excluded_counts,
     recommendations: recs,
     warnings,
   };

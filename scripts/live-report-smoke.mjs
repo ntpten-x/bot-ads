@@ -107,6 +107,22 @@ const ads = analysis.levels
     (left, right) => right.verified_unique_rows - left.verified_unique_rows,
   )[0];
 if (!ads) throw new Error("No Ads analysis scope available");
+const nonPerformance = new Set(["payment_error", "off", "parent_off"]);
+const performanceRows = ads.rows.filter(
+  (row) => !nonPerformance.has(row.delivery),
+);
+const hasSpend = performanceRows.some((row) => row.spend !== null);
+const hasSpendResults = performanceRows.some(
+  (row) => row.spend !== null && row.results !== null,
+);
+const hasPositiveComposition = performanceRows.some(
+  (row) => (row.spend ?? 0) > 0,
+);
+const performanceExcludedCounts = ads.rows.reduce((counts, row) => {
+  if (nonPerformance.has(row.delivery))
+    counts[row.delivery] = (counts[row.delivery] ?? 0) + 1;
+  return counts;
+}, {});
 const resultTypes = [
   ...new Set(ads.rows.map((row) => row.result_type).filter(Boolean)),
 ];
@@ -137,6 +153,7 @@ try {
       localStorage.setItem("analysisUseAttribution", "true");
       localStorage.setItem("analysisNoFilters", "true");
       localStorage.setItem("analysisNoBreakdown", "true");
+      localStorage.setItem("reportMetric", "spend");
       if (resultType) {
         localStorage.setItem("analysisResultType", resultType);
         localStorage.setItem("analysisUseResultType", "true");
@@ -151,22 +168,43 @@ try {
     },
   );
   await page.goto(`${webBase}/?account=${account}#reports`);
-  await page.getByRole("heading", { name: "รายงานโฆษณาแบบมองเห็น" }).waitFor();
+  await page.getByRole("heading", { name: "ดูผลโฆษณา", exact: true }).waitFor();
   await page
-    .getByText(`${ads.verified_unique_rows} Ads ที่ยืนยัน ID`, {
-      exact: true,
-    })
+    .getByText(`${ads.verified_unique_rows} Ads ที่อ่านได้`, { exact: false })
+    .waitFor();
+  await page
+    .getByText("แสดงเพื่อวินิจฉัยสถานะเท่านั้น", { exact: false })
     .waitFor();
   await page.getByRole("tab", { name: /ความสัมพันธ์/ }).click();
-  await page.getByRole("img", { name: /กราฟจุดความสัมพันธ์/ }).waitFor();
+  if (hasSpendResults)
+    await page.getByRole("img", { name: /กราฟจุดความสัมพันธ์/ }).waitFor();
+  else
+    await page.getByText("ต้องมีค่า ยอดใช้จ่าย และ", { exact: false }).waitFor();
   await page.getByRole("tab", { name: /การกระจาย/ }).click();
-  await page.getByRole("img", { name: /ฮิสโตแกรมการกระจาย/ }).waitFor();
+  if (hasSpend)
+    await page.getByRole("img", { name: /ฮิสโตแกรมการกระจาย/ }).waitFor();
+  else
+    await page
+      .getByText("ยังไม่มีค่า ยอดใช้จ่าย สำหรับดูการกระจาย", {
+        exact: false,
+      })
+      .waitFor();
   await page.getByRole("tab", { name: /^องค์ประกอบ/ }).click();
-  await page.getByRole("img", { name: /สัดส่วน Spend/ }).waitFor();
+  if (hasPositiveComposition)
+    await page.getByRole("img", { name: /สัดส่วน Spend/ }).waitFor();
+  else
+    await page.getByText("ไม่มีค่าสำหรับสร้างสัดส่วน", { exact: false }).waitFor();
   await page.getByRole("tab", { name: /เส้นสะสม/ }).click();
-  await page
-    .getByRole("img", { name: /กราฟเส้นสะสม Spend และ Results/ })
-    .waitFor();
+  if (hasSpendResults)
+    await page
+      .getByRole("img", { name: /กราฟเส้นสะสม Spend และ Results/ })
+      .waitFor();
+  else
+    await page
+      .getByText("ต้องมี Spend และ Results อย่างน้อยหนึ่ง Ads", {
+        exact: false,
+      })
+      .waitFor();
   await page.getByRole("tab", { name: /แนวโน้ม/ }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   const noOverflow = await page.evaluate(
@@ -193,6 +231,16 @@ try {
         coverage: ads.coverage,
         verified_ads: ads.verified_unique_rows,
         reported_ads: ads.reported_total_rows,
+        performance_rows: performanceRows.length,
+        performance_spend_rows: performanceRows.filter(
+          (row) => row.spend !== null,
+        ).length,
+        performance_spend_results_rows: performanceRows.filter(
+          (row) => row.spend !== null && row.results !== null,
+        ).length,
+        performance_excluded_counts: performanceExcludedCounts,
+        ranking_eligible: ads.ranking.eligible,
+        result_groups: ads.result_groups.length,
         unresolved_observations: ads.unresolved_observations,
         normalized_ads: materialization.normalized_ads,
         normalized_observations: materialization.normalized_observations,

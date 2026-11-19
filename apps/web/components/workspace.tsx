@@ -77,37 +77,38 @@ const navigation: {
   icon: string;
   title: string;
   description: string;
+  advanced?: boolean;
 }[] = [
   {
     id: "overview",
-    label: "ภาพรวม",
+    label: "เริ่มต้น",
     icon: "home",
     title: "ภาพรวมการทำงาน",
-    description: "เชื่อมต่อ Extension และเริ่มรวบรวมข้อมูลโฆษณา",
+    description: "ดูงานถัดไปและเริ่มวิเคราะห์โฆษณา",
   },
   {
     id: "reports",
-    label: "สตูดิโอรายงาน",
+    label: "ดูผลโฆษณา",
     icon: "chart",
-    title: "รายงานโฆษณาแบบมองเห็น",
+    title: "ดูผลโฆษณา",
     description:
-      "ดูกราฟแท่ง ตาราง และบริบทของข้อมูล Ads เพื่อวิเคราะห์ด้วยตนเอง",
+      "ดูภาพรวมผลงาน Ads และข้อมูลที่ระบบอ่านล่าสุด",
   },
   {
     id: "optimization",
-    label: "Optimization Loop",
+    label: "สิ่งที่ควรทำ",
     icon: "target",
-    title: "Optimization และการทดลอง",
+    title: "สิ่งที่ควรทำกับโฆษณา",
     description:
-      "เปลี่ยนหลักฐานจาก Ads เป็นข้อเสนอ แผนอนุมัติ การทดลอง และผลลัพธ์ที่วัดได้",
+      "ดูข้อเสนอที่อธิบายได้ วางแผนทดลอง และตรวจผลหลังดำเนินการ",
   },
   {
     id: "accounts",
-    label: "บัญชีและสุขภาพ",
+    label: "บัญชีที่เชื่อมต่อ",
     icon: "check",
-    title: "บัญชีโฆษณาและความพร้อม",
+    title: "บัญชีและอุปกรณ์",
     description:
-      "ตรวจ Device, coverage, normalized Ads และ acceptance ของแต่ละบัญชี",
+      "ตรวจว่าบัญชีและ Extension พร้อมใช้งานหรือไม่",
   },
   {
     id: "control",
@@ -115,6 +116,7 @@ const navigation: {
     icon: "pointer",
     title: "ควบคุมหน้า Meta",
     description: "อ่านหน้าปัจจุบัน แล้วเลือกสิ่งที่ต้องการให้ Extension ทำ",
+    advanced: true,
   },
   {
     id: "import",
@@ -122,6 +124,7 @@ const navigation: {
     icon: "upload",
     title: "นำเข้ารายงานโฆษณา",
     description: "ตรวจเงื่อนไขและความครบถ้วนของไฟล์ก่อนบันทึก",
+    advanced: true,
   },
   {
     id: "analysis",
@@ -129,6 +132,7 @@ const navigation: {
     icon: "database",
     title: "ข้อมูลสำหรับวิเคราะห์โฆษณา",
     description: "ตรวจค่าใช้จ่าย คอนเวอร์ชั่น และความพร้อมของข้อมูลรายโฆษณา",
+    advanced: true,
   },
   {
     id: "data",
@@ -136,6 +140,7 @@ const navigation: {
     icon: "database",
     title: "ข้อมูลและการส่งออก",
     description: "ค้นหาข้อมูลที่จัดเก็บ และเตรียมไปวิเคราะห์ต่อ",
+    advanced: true,
   },
   {
     id: "captures",
@@ -143,6 +148,7 @@ const navigation: {
     icon: "database",
     title: "ข้อมูลดิบจาก Extension",
     description: "ตรวจข้อมูลที่ Extension อ่านจากหน้า Meta และสถานะการยกขึ้นเป็นข้อมูลวิเคราะห์",
+    advanced: true,
   },
   {
     id: "history",
@@ -150,10 +156,11 @@ const navigation: {
     icon: "clock",
     title: "ประวัติคำสั่ง",
     description: "ติดตามคำสั่งที่ส่งไปยัง Extension และผลที่ได้รับ",
+    advanced: true,
   },
   {
     id: "settings",
-    label: "ตั้งค่าและวิธีใช้",
+    label: "ช่วยเหลือ",
     icon: "settings",
     title: "ตั้งค่าและวิธีใช้งาน",
     description: "เชื่อมต่อระบบและทำความเข้าใจขอบเขตการควบคุม",
@@ -325,6 +332,7 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
   const [accountInput, setAccountInput] = useState("");
   const [device, setDevice] = useState("");
   const [manualDevice, setManualDevice] = useState("");
+  const [advanced, setAdvanced] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [busy, setBusy] = useState("");
   const [toast, setToast] = useState<{
@@ -365,6 +373,14 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
     api,
     { refreshInterval: 15000 },
   );
+  const optimizationOverview = useSWR<{
+    scope: { coverage: string; verified_ads: number } | null;
+    recommendations: { status: string }[];
+    plans: { status: string }[];
+  }>(account ? `/optimization/workspace?account_id=${account}` : null, api, {
+    refreshInterval: view === "overview" ? 20_000 : 0,
+    revalidateOnFocus: false,
+  });
   const deviceStatus = useSWR<DeviceState | null>(
     device ? `/devices/${device}/state` : null,
     api,
@@ -402,8 +418,12 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
     }
     if (/^[0-9a-f-]{36}$/i.test(d)) setDevice(d);
     setInitialized(true);
+    const isAdvanced =
+      localStorage.getItem("collectorAdvancedMode") === "true";
+    setAdvanced(isAdvanced);
     const id = location.hash.slice(1);
-    if (navigation.some((n) => n.id === id)) setView(id as View);
+    const target = navigation.find((n) => n.id === id);
+    if (target && (!target.advanced || isAdvanced)) setView(target.id);
   }, []);
   useEffect(() => {
     if (!initialized || !bootstrap.data) return;
@@ -435,6 +455,13 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
   const changeView = (id: View) => {
     setView(id);
     history.replaceState(null, "", `#${id}`);
+  };
+  const toggleAdvanced = () => {
+    const next = !advanced;
+    setAdvanced(next);
+    localStorage.setItem("collectorAdvancedMode", String(next));
+    const currentNavigation = navigation.find((item) => item.id === view);
+    if (!next && currentNavigation?.advanced) changeView("overview");
   };
   const applyAccount = () => {
     if (!/^\d+$/.test(accountInput)) {
@@ -482,6 +509,63 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
   };
   const current = navigation.find((n) => n.id === view)!;
   const s = summary.data;
+  const primaryNavigation = navigation.filter((item) => !item.advanced);
+  const advancedNavigation = navigation.filter((item) => item.advanced);
+  const openRecommendations =
+    (optimizationOverview.data?.recommendations ?? []).filter(
+      (item) => item.status === "suggested",
+    ).length ?? 0;
+  const draftPlans =
+    (optimizationOverview.data?.plans ?? []).filter(
+      (item) => item.status === "draft",
+    )
+      .length ?? 0;
+  const nextAction = !account
+    ? {
+        view: "accounts" as View,
+        title: "เลือกบัญชีโฆษณาก่อน",
+        description: "เลือกบัญชีที่ต้องการดู หรือเพิ่มบัญชีใหม่จากหน้าบัญชี",
+        button: "เลือกบัญชี",
+      }
+    : !fresh
+      ? {
+          view: "settings" as View,
+          title: "เชื่อมต่อ Extension อีกครั้ง",
+          description:
+            "เปิด Ads Manager แล้วเชื่อมต่อ Extension เพื่อให้ระบบอ่านข้อมูลได้",
+          button: "ดูวิธีเชื่อมต่อ",
+        }
+      : (s?.ads ?? 0) === 0
+        ? {
+            view: "reports" as View,
+            title: "ดึงข้อมูล Ads ครั้งแรก",
+            description:
+              "เริ่มจากรายงาน Ads ล่าสุด แล้วระบบจะแสดงผลและสิ่งที่ควรทำ",
+            button: "เปิดรายงาน Ads",
+          }
+        : draftPlans > 0
+          ? {
+              view: "optimization" as View,
+              title: `มี ${draftPlans} แผนรอตรวจ`,
+              description:
+                "ตรวจข้อเสนอและหลักฐานก่อนอนุมัติ จากนั้นจึงทดลองกับโฆษณา",
+              button: "ตรวจแผนที่รออนุมัติ",
+            }
+          : openRecommendations > 0
+            ? {
+                view: "optimization" as View,
+                title: `มี ${openRecommendations} ข้อเสนอใหม่`,
+                description:
+                  "ดูว่า Ads ใดควรเพิ่มงบ ทดลองใหม่ หรือตรวจก่อนหยุด",
+                button: "ดูสิ่งที่ควรทำ",
+              }
+            : {
+                view: "reports" as View,
+                title: "ตรวจผลโฆษณารอบล่าสุด",
+                description:
+                  "ดูภาพรวมผลงาน แล้วสร้างข้อเสนอใหม่เมื่อข้อมูลพร้อม",
+                button: "เปิดผลโฆษณา",
+              };
   const error =
     health.error ?? bootstrap.error ?? deviceStatus.error ?? summary.error;
   return (
@@ -505,7 +589,7 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
             </span>
           </a>
           <nav aria-label="เมนูหลัก">
-            {navigation.map((n) => (
+            {primaryNavigation.map((n) => (
               <button
                 key={n.id}
                 className={view === n.id ? "active" : ""}
@@ -517,6 +601,31 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
               </button>
             ))}
           </nav>
+          <div className="advanced-nav-group">
+            <button
+              className={`advanced-mode-toggle ${advanced ? "active" : ""}`}
+              onClick={toggleAdvanced}
+              aria-expanded={advanced}
+            >
+              <Icon name="settings" />
+              {advanced ? "ซ่อนเครื่องมือขั้นสูง" : "เครื่องมือขั้นสูง"}
+            </button>
+            {advanced ? (
+              <nav aria-label="เครื่องมือขั้นสูง">
+                {advancedNavigation.map((n) => (
+                  <button
+                    key={n.id}
+                    className={view === n.id ? "active" : ""}
+                    aria-current={view === n.id ? "page" : undefined}
+                    onClick={() => changeView(n.id)}
+                  >
+                    <Icon name={n.icon} />
+                    {n.label}
+                  </button>
+                ))}
+              </nav>
+            ) : null}
+          </div>
           <div className="sidebar-bottom">
             <div className="local-label">
               <span className="status-dot" />
@@ -589,7 +698,7 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
             ) : null}
             <section className="context-bar" aria-label="เลือกบัญชีและอุปกรณ์">
               <div>
-                <label htmlFor="account">บัญชีโฆษณา</label>
+                <label htmlFor="account">บัญชีที่กำลังดู</label>
                 <form
                   className="input-with-button"
                   onSubmit={(e) => {
@@ -623,16 +732,17 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
                 </form>
               </div>
               <div className="device-field">
-                <label htmlFor="device">Chrome Extension</label>
+                <label htmlFor="device">อุปกรณ์ที่เชื่อมต่อ</label>
                 <select
                   id="device"
                   value={device}
                   onChange={(e) => chooseDevice(e.target.value)}
                 >
                   <option value="">เลือก Extension ที่เชื่อมต่อ</option>
-                  {bootstrap.data?.devices.map((d) => (
+                  {bootstrap.data?.devices.map((d, index) => (
                     <option key={d.id} value={d.id}>
-                      บัญชี {d.account_id} • {d.id.slice(0, 8)}
+                      บัญชี {d.account_id} •{" "}
+                      {advanced ? d.id.slice(0, 8) : `อุปกรณ์ ${index + 1}`}
                     </option>
                   ))}
                   {device &&
@@ -652,123 +762,151 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
                       : "ยังไม่เชื่อมต่อ"}
                 </Pill>
                 <small>
-                  {ds
+                  {advanced && ds
                     ? `สถานะล่าสุด ${time(ds.updated_at)}`
-                    : "เปิดรับคำสั่งจาก Extension ก่อน"}
+                    : fresh
+                      ? "พร้อมอ่านข้อมูลจาก Ads Manager"
+                      : "เปิด Extension แล้วเชื่อมต่อบัญชี"}
                 </small>
               </div>
             </section>
             {view === "overview" ? (
-              <>
-                <div className="setup-banner" hidden={fresh}>
-                  <span className="banner-icon">
-                    <Icon name="plug" />
-                  </span>
-                  <div>
-                    <h2>เริ่มจากเชื่อมต่อ Chrome Extension</h2>
-                    <p>
-                      เปิด Ads Manager → เปิด Extension → กรอกบัญชีและรหัส →
-                      เปิดรับคำสั่งบอท แล้วกลับมารีเฟรชหน้านี้
-                    </p>
+              <div className="guided-overview">
+                <section className="next-work" aria-label="งานถัดไป">
+                  <div className="next-work-copy">
+                    <span>งานถัดไปของคุณ</span>
+                    <h2>{nextAction.title}</h2>
+                    <p>{nextAction.description}</p>
+                    <div className="button-group">
+                      <button
+                        className="primary"
+                        onClick={() => changeView(nextAction.view)}
+                      >
+                        {nextAction.button}
+                      </button>
+                      {advanced ? (
+                        <button
+                          className="secondary"
+                          onClick={() => changeView("settings")}
+                        >
+                          ตั้งค่าการเชื่อมต่อ
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
-                  <button
-                    className="primary"
-                    onClick={() => changeView("settings")}
-                  >
-                    ดูวิธีเชื่อมต่อ
-                  </button>
-                </div>
-                <div className="section-head">
-                  <h2>ข้อมูลในฐานข้อมูล</h2>
-                  <span className="muted small">เฉพาะบัญชีที่เลือก</span>
-                </div>
-                <div className="stats-strip">
+                  <ol className="next-work-steps">
+                    {[
+                      {
+                        label: "เชื่อมต่อบัญชี",
+                        done: !!account && fresh,
+                        detail: fresh ? "พร้อมอ่านข้อมูล" : "ยังไม่พร้อม",
+                      },
+                      {
+                        label: "ดึงผลโฆษณา",
+                        done: (s?.ads ?? 0) > 0,
+                        detail: `${number(s?.ads)} Ads ในระบบ`,
+                      },
+                      {
+                        label: "ดูสิ่งที่ควรทำ",
+                        done:
+                          openRecommendations > 0 ||
+                          draftPlans > 0 ||
+                          optimizationOverview.data?.scope?.coverage === "complete",
+                        detail: `${openRecommendations} ข้อเสนอ`,
+                      },
+                      {
+                        label: "อนุมัติและตรวจผล",
+                        done: draftPlans > 0,
+                        detail: `${draftPlans} แผนรอตรวจ`,
+                      },
+                    ].map((step, index) => (
+                      <li key={step.label} className={step.done ? "done" : ""}>
+                        <i>{step.done ? "✓" : index + 1}</i>
+                        <span>
+                          <strong>{step.label}</strong>
+                          <small>{step.detail}</small>
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+
+                <section className="plain-summary" aria-label="สรุปงานล่าสุด">
                   {[
-                    ["Campaigns", s?.campaigns],
-                    ["Ad Sets", s?.ad_sets],
-                    ["Ads", s?.ads],
-                    ["รายการสถิติ", s?.observations],
+                    ["Ads ที่พร้อมดู", number(s?.ads)],
+                    ["ข้อเสนอใหม่", number(openRecommendations)],
+                    ["แผนรออนุมัติ", number(draftPlans)],
+                    ["Extension", fresh ? "ออนไลน์" : "ออฟไลน์"],
                   ].map(([label, value]) => (
                     <div key={label}>
                       <span>{label}</span>
-                      <strong>{number(value as number | undefined)}</strong>
+                      <strong>{value}</strong>
                     </div>
                   ))}
+                </section>
+
+                <div className="plain-actions">
+                  {[
+                    {
+                      view: "reports" as View,
+                      icon: "chart",
+                      title: "ดูผลโฆษณา",
+                      description: "ดูว่า Ads ใดใช้จ่ายและได้ผลลัพธ์เท่าไร",
+                    },
+                    {
+                      view: "optimization" as View,
+                      icon: "target",
+                      title: "ดูสิ่งที่ควรทำ",
+                      description: "ตรวจข้อเสนอและแผนก่อนตัดสินใจ",
+                    },
+                    {
+                      view: "accounts" as View,
+                      icon: "check",
+                      title: "จัดการบัญชี",
+                      description: "เพิ่มบัญชี ตรวจอุปกรณ์ และสถานะการเชื่อมต่อ",
+                    },
+                  ].map((task) => (
+                    <button
+                      key={task.view}
+                      onClick={() => changeView(task.view)}
+                    >
+                      <Icon name={task.icon} />
+                      <span>
+                        <strong>{task.title}</strong>
+                        <small>{task.description}</small>
+                      </span>
+                      <b aria-hidden="true">›</b>
+                    </button>
+                  ))}
                 </div>
-                <div className="overview-grid">
-                  <Panel title="ทำงานต่อจากตรงนี้">
+
+                <details className="technical-overview">
+                  <summary>รายละเอียดการเชื่อมต่อและจำนวนข้อมูล</summary>
+                  <div className="stats-strip">
                     {[
-                      {
-                        view: "reports" as View,
-                        icon: "chart",
-                        title: "เปิดสตูดิโอรายงาน",
-                        description:
-                          "ดู Spend, Results, Impressions และสถานะ Ads ในกราฟและตาราง",
-                      },
-                      {
-                        view: "control" as View,
-                        icon: "pointer",
-                        title: "อ่านหรือควบคุมหน้า Meta",
-                        description: "เลือกปุ่มและช่องกรอกจากหน้าที่ Extension มองเห็น",
-                      },
-                      {
-                        view: "import" as View,
-                        icon: "upload",
-                        title: "นำเข้ารายงานย้อนหลัง",
-                        description: "เลือก CSV ตรวจสอบข้อมูล แล้วบันทึกลงฐานข้อมูล",
-                      },
-                      {
-                        view: "data" as View,
-                        icon: "download",
-                        title: "ดูข้อมูลและส่งออก",
-                        description: "ค้นหา กรอง และดาวน์โหลดข้อมูลเพื่อวิเคราะห์ต่อ",
-                      },
-                    ].map((task) => (
-                      <button
-                        key={task.view}
-                        className="task-row"
-                        onClick={() => changeView(task.view)}
-                      >
-                        <span className="task-icon">
-                          <Icon name={task.icon} />
-                        </span>
-                        <div>
-                          <strong>{task.title}</strong>
-                          <p>{task.description}</p>
-                        </div>
-                        <span aria-hidden="true">›</span>
-                      </button>
+                      ["Campaigns", s?.campaigns],
+                      ["Ad Sets", s?.ad_sets],
+                      ["Ads", s?.ads],
+                      ["Observations", s?.observations],
+                      ["Imports", s?.imports],
+                    ].map(([label, value]) => (
+                      <div key={label}>
+                        <span>{label}</span>
+                        <strong>{number(value as number | undefined)}</strong>
+                      </div>
                     ))}
-                  </Panel>
-                  <Panel title="สถานะระบบ">
-                    <dl className="status-list">
-                      {[
-                        [
-                          "Backend / Database",
-                          health.data
-                            ? "พร้อมใช้งาน"
-                            : health.error
-                              ? "เชื่อมต่อไม่ได้"
-                              : "กำลังตรวจสอบ",
-                        ],
-                        ["Extension", fresh ? "เชื่อมต่อแล้ว" : "ยังไม่มีสถานะใหม่"],
-                        [
-                          "งานอ่านตาราง",
-                          jobNames[ds?.state.job?.status ?? ""] ?? "ยังไม่มีงาน",
-                        ],
-                        ["การนำเข้าทั้งหมด", number(s?.imports)],
-                        ["นำเข้าล่าสุด", time(s?.last_import)],
-                      ].map(([label, value]) => (
-                        <div key={label}>
-                          <dt>{label}</dt>
-                          <dd>{value}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                    <Note>จำนวนที่จัดเก็บยังไม่ยืนยันว่าครบทั้งบัญชี</Note>
-                  </Panel>
-                </div>
-              </>
+                  </div>
+                  <p>
+                    Backend: {health.data ? "พร้อมใช้งาน" : "กำลังตรวจสอบ"} ·
+                    Extension: {fresh ? "ออนไลน์" : "ออฟไลน์"} · งานล่าสุด:{" "}
+                    {jobNames[ds?.state.job?.status ?? ""] ?? "ยังไม่มีงาน"}
+                  </p>
+                  <Note>
+                    จำนวนที่จัดเก็บยังไม่ยืนยันความครบทั้งบัญชี
+                    ระบบจะแจ้งเมื่อข้อมูลไม่พอสำหรับการวิเคราะห์
+                  </Note>
+                </details>
+              </div>
             ) : null}
             {view === "control" ? (
               <ControlView
@@ -795,6 +933,7 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
                 device={device}
                 send={send}
                 fresh={fresh}
+                advanced={advanced}
                 onOpenCaptureSetup={() => changeView("analysis")}
                 onOpenOptimization={() => changeView("optimization")}
                 onImport={() => changeView("import")}
@@ -808,6 +947,7 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
                 api={api}
                 run={run}
                 busy={!!busy}
+                advanced={advanced}
                 onOpenControl={() => changeView("control")}
               />
             ) : null}

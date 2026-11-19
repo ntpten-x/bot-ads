@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { runCollectionSchedules } from "../apps/api/src/accounts.js";
+import { runDataLifecycle } from "../apps/api/src/data-lifecycle.js";
+import { captureAnalysisVersion } from "../packages/core/src/capture-analysis.js";
 const base = process.env.CAPTURES_TEST_API ?? "http://127.0.0.1:4318";
 const token = process.env.API_TOKEN!;
 async function req(path: string, body?: unknown) {
@@ -542,12 +544,119 @@ try {
   assert.equal(materialized.body.rows, 2);
   assert.equal(materialized.body.promoted, 2);
   assert.equal(materialized.body.unique_observations, 2);
+  const catalog = await db.query(
+    `SELECT count(*)::int AS count
+     FROM ad_catalog
+     WHERE account_id=$1 AND level='ad'`,
+    [account],
+  );
+  assert.ok(catalog.rows[0].count > 0, "verified Ad IDs enter the catalog");
+  const lifecycle = await req(
+    `/data-lifecycle?account_id=${account}`,
+  );
+  assert.equal(lifecycle.status, 200);
+  assert.ok(lifecycle.body.catalog.ads > 0);
+  const lifecyclePreview = await req("/data-lifecycle/preview", {
+    account_id: account,
+  });
+  assert.equal(lifecyclePreview.status, 200);
+  assert.equal(lifecyclePreview.body.mode, "dry_run");
+  const lifecycleImportJob = randomUUID();
+  await db.query(
+    `INSERT INTO import_jobs(id,account_id,fingerprint,status)
+     VALUES($1,$2,$3,'completed')`,
+    [lifecycleImportJob, account, `lifecycle-${lifecycleImportJob}`],
+  );
+  await db.query(
+    `INSERT INTO insight_observations(
+       grain_key,account_id,level,entity_id,date_start,date_end,currency,
+       timezone,attribution,result_type,data,last_job_id
+     ) VALUES(
+       $1,$2,'ad','lifecycle-fixture','2025-01-01','2025-01-01','THB',
+       'Asia/Bangkok','7-day click','Messages',$3,$4
+     )`,
+    [
+      `lifecycle-fixture-${lifecycleImportJob}`,
+      account,
+      JSON.stringify({ spend: 100, impressions: 1000, results: 10 }),
+      lifecycleImportJob,
+    ],
+  );
+  const oldSnapshot = await db.query(
+    `SELECT id FROM capture_snapshots
+     WHERE bound_account=$1 AND review_status='promoted' AND job_id<>$2
+     ORDER BY captured_at LIMIT 1`,
+    [account, adsOnlyJobId],
+  );
+  assert.equal(oldSnapshot.rowCount, 1);
+  const retainedSnapshotId = randomUUID();
+  await db.query(
+    `INSERT INTO capture_snapshots(
+       id,fingerprint,job_id,device_id,bound_account,account_id,page,level,
+       captured_at,reader_version,format,coverage,column_alignment,
+       reporting_context,warnings,row_count,review_status,review_reasons,raw
+     )
+     SELECT
+       $1,$2,job_id,device_id,bound_account,account_id,page,level,
+       now()-interval '60 days',reader_version,format,coverage,column_alignment,
+       reporting_context,warnings,row_count,'needs_review','[]',raw
+     FROM capture_snapshots WHERE id=$3`,
+    [
+      retainedSnapshotId,
+      `lifecycle-retained-${retainedSnapshotId}`,
+      oldSnapshot.rows[0].id,
+    ],
+  );
+  await db.query(
+    "UPDATE capture_snapshots SET captured_at=now()-interval '60 days' WHERE id=$1",
+    [oldSnapshot.rows[0].id],
+  );
+  const appliedLifecycle = await runDataLifecycle(db, {
+    apply: true,
+    accountId: account,
+  });
+  assert.equal(appliedLifecycle.mode, "apply");
+  assert.ok(appliedLifecycle.deleted.daily_observations >= 1);
+  assert.ok(appliedLifecycle.deleted.raw_snapshots >= 1);
+  const rolledUp = await db.query(
+    `SELECT spend,impressions,results
+     FROM ad_performance_monthly
+     WHERE account_id=$1 AND entity_id='lifecycle-fixture'`,
+    [account],
+  );
+  assert.equal(rolledUp.rowCount, 1);
+  assert.equal(Number(rolledUp.rows[0].spend), 100);
+  assert.equal(Number(rolledUp.rows[0].results), 10);
+  const retainedReview = await db.query(
+    `SELECT count(*)::int AS count FROM capture_snapshots
+     WHERE bound_account=$1 AND review_status='needs_review'`,
+    [account],
+  );
+  assert.ok(retainedReview.rows[0].count > 0);
   const cachedReport = await req(
     `/captures/analysis?account_id=${account}&job_id=${adsOnlyJobId}&timezone=Asia%2FBangkok&result_type=Messages&confirm_no_filters=true&confirm_no_breakdown=true`,
   );
   assert.equal(cachedReport.status, 200);
   assert.equal(cachedReport.body.report_cached, true);
   assert.equal(cachedReport.body.levels[0].verified_unique_rows, 1);
+  await db.query(
+    "UPDATE capture_job_reports SET analyzer_version=0 WHERE job_id=$1",
+    [adsOnlyJobId],
+  );
+  const recomputedReport = await req(
+    `/captures/analysis?account_id=${account}&job_id=${adsOnlyJobId}&timezone=Asia%2FBangkok&result_type=Messages&confirm_no_filters=true&confirm_no_breakdown=true`,
+  );
+  assert.equal(recomputedReport.status, 200);
+  assert.equal(
+    recomputedReport.body.report_cached,
+    false,
+    "an old analyzer cache must be recomputed",
+  );
+  const recached = await db.query(
+    "SELECT analyzer_version FROM capture_job_reports WHERE job_id=$1",
+    [adsOnlyJobId],
+  );
+  assert.equal(recached.rows[0].analyzer_version, captureAnalysisVersion);
   const materializationStatus = await req(
     `/captures/jobs/${adsOnlyJobId}/materialization?account_id=${account}`,
   );
@@ -715,10 +824,31 @@ try {
     config: { daily_budget: 200, create_as_paused: true },
   });
   assert.equal(template.status, 201);
+  const optimizationScopeKey = optimizationAnalysis.body.levels[0].scope_key;
+  await db.query(
+    `INSERT INTO optimization_recommendations(
+       id,account_id,job_id,scope_key,source_key,entity_type,entity_id,
+       action,title,rationale,evidence,confidence,risk,expected_impact,status
+     ) VALUES($1,$2,$3,$4,$5,'ad','999','pause_candidate',
+       'Unsupported old recommendation','Fixture stale evidence',
+       '{}'::jsonb,0.9,'medium','{}'::jsonb,'suggested')`,
+    [
+      randomUUID(),
+      account,
+      optimizationJobId,
+      optimizationScopeKey,
+      `${optimizationScopeKey}:999:pause_candidate`,
+    ],
+  );
+  await db.query(
+    "UPDATE capture_job_reports SET analyzer_version=0 WHERE job_id=$1",
+    [optimizationJobId],
+  );
   const optimizationWorkspace = await req(
     `/optimization/workspace?account_id=${account}`,
   );
   assert.equal(optimizationWorkspace.status, 200);
+  assert.equal(optimizationWorkspace.body.scope.coverage, "complete");
   assert.equal(optimizationWorkspace.body.recommendations.length, 3);
   assert.equal(optimizationWorkspace.body.plans.length, 1);
   assert.equal(optimizationWorkspace.body.experiments.length, 1);
@@ -733,6 +863,38 @@ try {
     optimizationWorkspace.body.capability.automated_meta_mutation,
     false,
   );
+  const refreshedOptimizationCache = await db.query(
+    "SELECT analyzer_version FROM capture_job_reports WHERE job_id=$1",
+    [optimizationJobId],
+  );
+  assert.ok(
+    refreshedOptimizationCache.rows.every(
+      (row) => row.analyzer_version === captureAnalysisVersion,
+    ),
+    "Optimization Workspace must refresh stale report caches before selecting a scope",
+  );
+  const emptyOptimizationJob = randomUUID();
+  const emptyOptimizationState = {
+    ...optimizationState,
+    job: {
+      ...optimizationState.job,
+      id: emptyOptimizationJob,
+      snapshots: [],
+      status: "needs_review",
+    },
+  };
+  await req(`/devices/${device}/state`, emptyOptimizationState);
+  await req(
+    `/captures/jobs/${emptyOptimizationJob}/review?account_id=${account}`,
+    {},
+  );
+  const fallbackWorkspace = await req(
+    `/optimization/workspace?account_id=${account}`,
+  );
+  assert.equal(fallbackWorkspace.status, 200);
+  assert.ok(fallbackWorkspace.body.scope);
+  assert.notEqual(fallbackWorkspace.body.scope.job_id, emptyOptimizationJob);
+  assert.equal(fallbackWorkspace.body.scope.coverage, "complete");
   const trend = await req(`/insights/trend?account_id=${account}`);
   assert.equal(trend.status, 200);
   assert.equal(trend.body.groups.length, 1);
@@ -849,6 +1011,60 @@ try {
     ).status,
     403,
   );
+  const otherCustomerAccount = `9${Date.now() + 1}`;
+  await req(`/customers/${customer.body.id}/accounts`, {
+    account_id: otherCustomerAccount,
+  });
+  const limitedOperator = await req(
+    `/customers/${customer.body.id}/clients`,
+    {
+      name: "Fixture limited operator",
+      role: "operator",
+      all_accounts: false,
+      account_ids: [account],
+    },
+  );
+  assert.equal(limitedOperator.status, 201);
+  assert.equal(limitedOperator.body.all_accounts, false);
+  const limitedMe = await clientReq(
+    limitedOperator.body.token,
+    "/auth/me",
+  );
+  assert.deepEqual(limitedMe.body.accounts, [account]);
+  assert.equal(limitedMe.body.all_accounts, false);
+  const limitedAccounts = await clientReq(
+    limitedOperator.body.token,
+    "/managed-accounts",
+  );
+  assert.deepEqual(
+    limitedAccounts.body.map((item: { account_id: string }) => item.account_id),
+    [account],
+  );
+  assert.equal(
+    (
+      await clientReq(
+        limitedOperator.body.token,
+        `/export?account_id=${otherCustomerAccount}`,
+      )
+    ).status,
+    403,
+  );
+  const limitedCustomers = await clientReq(
+    limitedOperator.body.token,
+    "/customers",
+  );
+  assert.equal(limitedCustomers.body[0].account_count, 1);
+  const expandedAccess = await req(
+    `/customers/${customer.body.id}/clients/${limitedOperator.body.id}`,
+    { all_accounts: true },
+  );
+  assert.equal(expandedAccess.status, 200);
+  assert.equal(expandedAccess.body.all_accounts, true);
+  const expandedAccounts = await clientReq(
+    limitedOperator.body.token,
+    "/managed-accounts",
+  );
+  assert.equal(expandedAccounts.body.length, 2);
   const viewer = await req(`/customers/${customer.body.id}/clients`, {
     name: "Fixture viewer",
     role: "viewer",
@@ -899,6 +1115,14 @@ try {
     [customer.body.id],
     "a customer-scoped admin token must not list other customers",
   );
+  await req(`/devices/${device}/state`, {
+    ...optimizationState,
+    job: {
+      ...optimizationState.job,
+      status: "needs_review",
+      snapshots: [],
+    },
+  });
   const schedule = await patch(
     `/managed-accounts/${account}/schedule`,
     { enabled: true, interval_minutes: 60 },
@@ -910,7 +1134,7 @@ try {
     scheduledRuns.some(
       (item) => item.account_id === account && item.status === "queued",
     ),
-    "a due schedule with a fresh read-enabled device must queue report.collect",
+    `a due schedule with a fresh read-enabled device must queue report.collect: ${JSON.stringify(scheduledRuns)}`,
   );
   const scheduledCommand = await db.query(
     `SELECT command FROM bot_commands
@@ -1002,6 +1226,16 @@ try {
     "DELETE FROM capture_rows WHERE snapshot_id IN (SELECT id FROM capture_snapshots WHERE bound_account=$1)",
     [account],
   );
+  await db.query("DELETE FROM ad_status_history WHERE account_id=$1", [
+    account,
+  ]);
+  await db.query("DELETE FROM ad_catalog WHERE account_id=$1", [account]);
+  await db.query("DELETE FROM ad_performance_monthly WHERE account_id=$1", [
+    account,
+  ]);
+  await db.query("DELETE FROM data_lifecycle_runs WHERE account_id=$1", [
+    account,
+  ]);
   await db.query("DELETE FROM capture_snapshots WHERE bound_account=$1", [
     account,
   ]);

@@ -179,7 +179,13 @@ try {
                       ok: true,
                       job: {
                         id: response.job.id,
-                        status: "needs_review",
+                        status: "running",
+                      },
+                      collection: {
+                        phase: "collection_started",
+                        active: true,
+                        job_id: response.job.id,
+                        job_status: "running",
                       },
                     },
                   }
@@ -264,10 +270,11 @@ try {
   await page.addInitScript(() => {
     sessionStorage.setItem("collectorToken", "fixture-only");
     localStorage.setItem("collectorAccount", "123456789");
+    localStorage.setItem("collectorAdvancedMode", "true");
   });
   await page.goto("http://127.0.0.1:9321/?account=123456789#reports");
   await expect(
-    page.getByRole("heading", { name: "รายงานโฆษณาแบบมองเห็น" }),
+    page.getByRole("heading", { name: "ดูผลโฆษณา" }),
   ).toBeVisible();
   const pull = page.getByRole("button", { name: "ดึงข้อมูล Ads ใหม่" });
   await expect(pull).toBeEnabled();
@@ -280,7 +287,14 @@ try {
     scan_columns: false,
   });
   await expect(
-    page.getByText("คำสั่งรายงานจบแล้ว", { exact: true }),
+    page.getByText("เริ่ม Collection แล้ว Extension กำลังอ่านตาราง", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Command: done · Collection: running · กำลังทำงาน", {
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(
     page.getByText("Ad Alpha", { exact: true }).first(),
