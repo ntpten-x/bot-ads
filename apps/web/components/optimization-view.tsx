@@ -248,7 +248,7 @@ export default function OptimizationView({
   const highRisk = recommendations.filter(
     (item) => item.risk === "high" && item.status === "suggested",
   ).length;
-  const currency = current?.scope?.context.currency ?? "THB";
+  const currency = current?.scope?.context?.currency ?? "THB";
   const stages = useMemo(
     () => [
       {
@@ -398,8 +398,8 @@ export default function OptimizationView({
           <div>
             <span>ช่วงรายงาน</span>
             <strong>
-              {current?.scope?.context.date_start ?? "—"} ถึง{" "}
-              {current?.scope?.context.date_end ?? "—"}
+              {current?.scope?.context?.date_start ?? "—"} ถึง{" "}
+              {current?.scope?.context?.date_end ?? "—"}
             </strong>
           </div>
           <div>
@@ -412,7 +412,7 @@ export default function OptimizationView({
           </div>
           <div className="optimization-technical">
             <span>History versions</span>
-            <strong>{number(current?.hierarchy_versions.ad ?? 0)}</strong>
+            <strong>{number(current?.hierarchy_versions?.ad ?? 0)}</strong>
           </div>
           <button
             className="primary"
@@ -420,6 +420,13 @@ export default function OptimizationView({
             onClick={() => void rebuild()}
           >
             สร้างข้อเสนอใหม่
+          </button>
+          <button
+            className="secondary"
+            disabled={!account}
+            onClick={onOpenControl}
+          >
+            เปิดเครื่องมือแก้ Ads (Manual)
           </button>
         </div>
         {lastRebuild ? <p role="status">{lastRebuild}</p> : null}
@@ -700,7 +707,7 @@ export default function OptimizationView({
                 <button className="secondary">บันทึก Creative metadata</button>
               </form>
               <div className="memory-list">
-                {current?.creatives.slice(0, 8).map((creative) => (
+                {(current?.creatives ?? []).slice(0, 8).map((creative) => (
                   <div key={creative.id}>
                     <strong>{creative.headline ?? creative.title ?? creative.ad_id}</strong>
                     <small>
@@ -780,7 +787,7 @@ export default function OptimizationView({
                 <button className="secondary">สร้าง Template</button>
               </form>
               <div className="memory-list">
-                {current?.templates.slice(0, 8).map((template) => (
+                {(current?.templates ?? []).slice(0, 8).map((template) => (
                   <div key={template.id}>
                     <strong>{template.name}</strong>
                     <small>
@@ -1023,11 +1030,17 @@ export default function OptimizationView({
             </div>
             <div className="capability-note">
               <strong>
-                {current?.capability.automated_meta_mutation
+                {current?.capability?.automated_meta_mutation
                   ? "พร้อมส่งคำสั่งอัตโนมัติ"
                   : "ยังไม่เปิด Meta mutation อัตโนมัติ"}
               </strong>
-              <span>{current?.capability.reason}</span>
+              <span>
+                {current?.capability?.reason ?? "ยังไม่มี certified action adapter"} · การแก้ Ads ทำได้แบบ Manual
+                ผ่าน Extension และ Local Approval
+              </span>
+              <button className="secondary" onClick={onOpenControl}>
+                เปิดหน้าควบคุม Meta
+              </button>
             </div>
           </Panel>
         </aside>

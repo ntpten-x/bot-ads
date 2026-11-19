@@ -62,6 +62,10 @@ npm run start:web
 Daily retention, Raw Capture และ Monthly rollups. ปุ่ม “ตรวจแผนลบข้อมูล”
 เรียก dry-run เท่านั้น; การ apply จริงทำผ่าน CLI หลังตรวจผลและ backup
 
+หน้า **สิ่งที่ควรทำ** มีปุ่ม “เปิดเครื่องมือแก้ Ads (Manual)” ให้เห็นในโหมดง่าย
+เพื่อไปยัง Control Meta โดยยังต้องเปิด write session ใน popup Extension และ
+ผ่าน Local Approval สำหรับ action สำคัญ; ปุ่มนี้ไม่เปิด autonomous mutation
+
 - **ภาพรวม:** สถานะ Backend/Database, Extension heartbeat, จำนวน Campaign / Ad Set / Ad / observations ในฐานข้อมูล และจำนวนการนำเข้าของบัญชีที่เลือก
 - **บัญชีและสุขภาพ:** แสดง Customer, Account, Device heartbeat, coverage, normalized Ads ของงานล่าสุด, target configuration, acceptance และกำหนดการอ่านอัตโนมัติ พร้อมเปิด/ปิด Customer/บัญชี, เพิกถอน token และดู audit trail
 - **สตูดิโอรายงาน:** เลือกงานอ่าน Ads และ reporting scope เพื่อดูกราฟแท่ง ตาราง สถานะการนำส่ง และ coverage โดยไม่ให้ระบบตัดสินแทนผู้ใช้

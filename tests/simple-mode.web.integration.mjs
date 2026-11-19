@@ -58,13 +58,46 @@ try {
                 ? []
                 : path === "/api/optimization/workspace"
                   ? {
-                      scope: { coverage: "complete", verified_ads: 18 },
+                      scope: {
+                        coverage: "complete",
+                        verified_ads: 18,
+                        reported_ads: 18,
+                        job_id: "00000000-0000-4000-8000-000000000301",
+                        job_status: "needs_review",
+                        captured_at: new Date().toISOString(),
+                        context: {
+                          account_id: "123456789",
+                          date_start: "2026-11-01",
+                          date_end: "2026-11-18",
+                          currency: "THB",
+                          timezone: "Asia/Bangkok",
+                          attribution: "7-day click",
+                          breakdown: {},
+                          filters: [],
+                        },
+                      },
                       policy: {},
-                      recommendations: [
-                        { status: "suggested" },
-                        { status: "suggested" },
+                      recommendations: [],
+                      plans: [
+                        {
+                          id: "00000000-0000-4000-8000-000000000302",
+                          status: "draft",
+                          title: "Fixture optimization plan",
+                          created_at: new Date().toISOString(),
+                          steps: [],
+                          receipts: [],
+                          rollbacks: [],
+                        },
                       ],
-                      plans: [{ status: "draft" }],
+                      experiments: [],
+                      creatives: [],
+                      templates: [],
+                      outcomes: [],
+                      hierarchy_versions: { ad: 1 },
+                      capability: {
+                        automated_meta_mutation: false,
+                        reason: "certified adapter required",
+                      },
                     }
                   : path === "/api/imports"
                     ? []
@@ -93,6 +126,18 @@ try {
   await expect(
     page.getByRole("button", { name: "สิ่งที่ควรทำ", exact: true }),
   ).toBeVisible();
+  await page
+    .getByRole("button", { name: "สิ่งที่ควรทำ", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", {
+      name: "เปิดเครื่องมือแก้ Ads (Manual)",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "เริ่มต้น", exact: true })
+    .click();
   await expect(
     page.getByRole("button", { name: "ควบคุมหน้า Meta", exact: true }),
   ).toHaveCount(0);
