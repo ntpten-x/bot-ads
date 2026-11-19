@@ -84,15 +84,22 @@ function getDeviceId() {
   return identityPromise;
 }
 async function backendRequest(path: string, body?: unknown) {
-  const { token } = await chrome.storage.session.get("token");
-  if (typeof token !== "string" || !token.trim())
+  const [{ token }, { deviceCredential }] = await Promise.all([
+    chrome.storage.session.get("token"),
+    chrome.storage.local.get("deviceCredential"),
+  ]);
+  const credential =
+    typeof token === "string" && token.trim()
+      ? token
+      : (deviceCredential as { credential?: string } | undefined)?.credential;
+  if (typeof credential !== "string" || !credential)
     throw new Error("กรอกรหัสเชื่อมต่อ Backend จากไฟล์ .env ก่อน");
   let response: Response;
   try {
     response = await fetch(`http://127.0.0.1:4318${path}`, {
       method: body === undefined ? "GET" : "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${credential}`,
         "Content-Type": "application/json",
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -105,6 +112,50 @@ async function backendRequest(path: string, body?: unknown) {
     throw new Error("รหัสเชื่อมต่อ Backend ไม่ถูกต้อง ตรวจค่า API_TOKEN ในไฟล์ .env");
   if (!response.ok) throw new Error(`Backend ตอบกลับ HTTP ${response.status}`);
   return response.json();
+}
+async function ensureDeviceCredential(account: string) {
+  const device = await getDeviceId();
+  const stored = (
+    await chrome.storage.local.get("deviceCredential")
+  ).deviceCredential as
+    | { device?: string; account?: string; credential?: string }
+    | undefined;
+  if (
+    stored?.device === device &&
+    stored.account === account &&
+    typeof stored.credential === "string" &&
+    stored.credential
+  )
+    return stored.credential;
+  const { token } = await chrome.storage.session.get("token");
+  if (typeof token !== "string" || !token.trim())
+    throw new Error(
+      "ต้องกรอก API_TOKEN หนึ่งครั้งเพื่อผูก Device กับบัญชีนี้",
+    );
+  const response = await fetch(
+    `http://127.0.0.1:4318/devices/${device}/pair`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ account_id: account }),
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+  if (!response.ok)
+    throw new Error(`Pair device failed with HTTP ${response.status}`);
+  const paired = (await response.json()) as { credential?: string };
+  if (!paired.credential) throw new Error("Pair device returned no credential");
+  await chrome.storage.local.set({
+    deviceCredential: {
+      device,
+      account,
+      credential: paired.credential,
+    },
+  });
+  return paired.credential;
 }
 async function publishBridgeState(bridge: z.infer<typeof bridgeSchema>) {
   const session = await uiSession("status");
@@ -744,6 +795,7 @@ async function perform(message: any): Promise<any> {
       if (!(await chrome.permissions.contains({ origins })))
         throw new Error("Meta permission required");
       await backendRequest("/health");
+      await ensureDeviceCredential(account);
       const previous = await getBridge();
       if (previous && previous.account !== account) {
         await perform({ command: "pause" });
@@ -926,8 +978,19 @@ async function bridgeTick() {
   bridgeBusy = true;
   try {
     const bridge = await getBridge();
-    const { token } = await chrome.storage.session.get("token");
-    if (!bridge?.enabled || typeof token !== "string" || !token) return;
+    const [{ token }, { deviceCredential }] = await Promise.all([
+      chrome.storage.session.get("token"),
+      chrome.storage.local.get("deviceCredential"),
+    ]);
+    const paired = deviceCredential as
+      | { device?: string; account?: string; credential?: string }
+      | undefined;
+    const hasCredential =
+      (typeof token === "string" && !!token) ||
+      (paired?.device === bridge?.device &&
+        paired?.account === bridge?.account &&
+        !!paired?.credential);
+    if (!bridge?.enabled || !hasCredential) return;
     const request = (path: string, body?: unknown) =>
       backendRequest(`/devices/${bridge.device}${path}`, body);
     // Account binding must still hold before accepting a remote command.
@@ -995,6 +1058,39 @@ async function bridgeTick() {
     bridgeBusy = false;
   }
 }
+async function ensureBridgeRuntime() {
+  const bridge = await getBridge();
+  if (!bridge?.enabled) return;
+  if (!(await chrome.permissions.contains({ origins }))) return;
+  const { deviceCredential } = await chrome.storage.local.get(
+    "deviceCredential",
+  );
+  const paired = deviceCredential as
+    | { device?: string; account?: string; credential?: string }
+    | undefined;
+  if (
+    paired?.device !== bridge.device ||
+    paired.account !== bridge.account ||
+    !paired.credential
+  )
+    return;
+  await chrome.alarms.create("bridge", { periodInMinutes: 0.5 });
+  void bridgeTick();
+}
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "bridge") void bridgeTick();
 });
+chrome.runtime.onStartup.addListener(() => void ensureBridgeRuntime());
+chrome.runtime.onInstalled.addListener(() => void ensureBridgeRuntime());
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  void getBridge().then((bridge) => {
+    if (bridge?.enabled && bridge.tabId === tabId) void bridgeTick();
+  });
+});
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.status !== "complete") return;
+  void getBridge().then((bridge) => {
+    if (bridge?.enabled && bridge.tabId === tabId) void bridgeTick();
+  });
+});
+void ensureBridgeRuntime();

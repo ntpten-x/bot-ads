@@ -23,6 +23,7 @@ try {
     "012_account_level_access",
     "013_report_analysis_version",
     "014_data_lifecycle",
+    "015_device_credentials",
   ]) {
     const { rowCount } = await client.query(
       "SELECT 1 FROM schema_migrations WHERE name=$1",

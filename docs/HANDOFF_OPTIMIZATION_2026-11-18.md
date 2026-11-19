@@ -2,7 +2,7 @@
 
 วันที่: 18 พฤศจิกายน 2026
 
-สถานะ source/build: Extension `0.6.70`
+สถานะ source/build: Extension `0.6.71`
 
 Branch ที่ส่งต่อ: `master`
 
@@ -66,7 +66,7 @@ readback, idempotency และ rollback ครบ
 ## 3. Architecture
 
 ```text
-Chrome Extension 0.6.70
+Chrome Extension 0.6.71
   → visible Meta Ads Manager UI
   → command queue :4318
   → PostgreSQL raw captures

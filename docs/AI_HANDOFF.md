@@ -9,7 +9,7 @@
 สถานะรวมถึง CSV-first reconciliation และ source separation ณ 17 พฤศจิกายน 2026 อยู่ที่
 [HANDOFF_ADS_ANALYSIS_2026-11-17.md](HANDOFF_ADS_ANALYSIS_2026-11-17.md)
 
-เอกสารส่งต่องาน ณ 19 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.70 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+เอกสารส่งต่องาน ณ 19 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.71 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
 
 Data lifecycle ล่าสุดอยู่ที่ [DATA_LIFECYCLE.md](DATA_LIFECYCLE.md): catalog Ads,
 status history, monthly rollups, raw retention, dry-run CLI/API และ policy
@@ -402,7 +402,10 @@ only when its `job_id`, `scope_key` and `source_key` are still supported by the
 current deterministic evaluation. Historical plans remain visible for audit,
 but recommendations that depended on billing-error or disabled Ads are hidden.
 
-Extension `0.6.70` adds the gridless-report fallback required by the new live
+Extension `0.6.71` adds scoped device credentials and startup self-healing.
+The one-time pairing stores only a hashed credential on the backend and a
+device-scoped credential in Extension local storage. The report-input lease and
+manual mutation approval remain mandatory. It also retains the gridless-report fallback required by the new live
 account layout. That page rendered 794 Ads with headers, switches and
 checkboxes but no `role="row"` elements, so `0.6.48` incorrectly reported
 `rows=0`. The fallback may keep visible text/geometry as raw evidence, but never

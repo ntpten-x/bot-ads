@@ -988,6 +988,27 @@ try {
   );
   assert.notEqual(storedClient.rows[0].token_hash, operator.body.token);
   assert.equal(storedClient.rows[0].token_hash.length, 64);
+  const pairedDevice = await req(`/devices/${device}/pair`, {
+    account_id: account,
+  });
+  assert.equal(pairedDevice.status, 201);
+  assert.equal(pairedDevice.body.credential.length, 64);
+  const storedDevice = await db.query(
+    "SELECT token_hash FROM device_credentials WHERE device_id=$1",
+    [device],
+  );
+  assert.notEqual(storedDevice.rows[0].token_hash, pairedDevice.body.credential);
+  const pairedState = await fetch(`${base}/devices/${device}/state`, {
+    headers: { Authorization: `Bearer ${pairedDevice.body.credential}` },
+  });
+  assert.equal(pairedState.status, 200);
+  const pairedOtherAccount = await fetch(
+    `${base}/devices/${device}/state?account_id=1${Date.now()}`,
+    {
+      headers: { Authorization: `Bearer ${pairedDevice.body.credential}` },
+    },
+  );
+  assert.equal(pairedOtherAccount.status, 403);
   const scopedAccounts = await clientReq(
     operator.body.token,
     "/managed-accounts",

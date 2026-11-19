@@ -1988,3 +1988,19 @@ Validation passed:
 The current policy is 30-day raw capture, 540-day daily metrics, 36-month
 monthly rollups and 730-day duplicate entity-version retention. Apply requires
 the explicit `DATA_LIFECYCLE_APPLY=apply-data-lifecycle` environment variable.
+
+## Device-scoped pairing — 0.6.71
+
+Migration `015_device_credentials` stores only a SHA-256 credential hash. The
+Extension keeps a device-scoped credential in `chrome.storage.local`; the
+global backend API token is needed only for first pairing or when switching the
+bound account. Startup/install/tab events restore the bridge alarm and publish
+state automatically.
+
+Validation passed: `test:connect`, `test:captures`, `test:simple-mode`,
+TypeScript and Extension/API build. The API pairing fixture verifies that the
+device credential authenticates only its bound device/account and that the
+plaintext credential is not stored in PostgreSQL.
+
+This does not auto-approve report-input leases or mutation approval. Those
+per-session safety gates remain mandatory.

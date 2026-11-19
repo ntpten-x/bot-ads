@@ -54,14 +54,32 @@ app.use(async (req, res, next) => {
        WHERE api.token_hash=$1 AND api.enabled=true AND c.enabled=true`,
       [hash],
     );
-    if (!client.rowCount) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
+    if (client.rowCount) {
+      (req as any).auth = {
+        kind: "client",
+        ...client.rows[0],
+      };
+    } else {
+      const device = await pool.query(
+        `UPDATE device_credentials
+         SET last_used_at=now()
+         WHERE token_hash=$1 AND enabled=true
+         RETURNING device_id,account_id`,
+        [hash],
+      );
+      if (!device.rowCount) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      (req as any).auth = {
+        kind: "device",
+        id: device.rows[0].device_id,
+        account_id: device.rows[0].account_id,
+        customer_id: null,
+        role: "operator",
+        all_accounts: false,
+      };
     }
-    (req as any).auth = {
-      kind: "client",
-      ...client.rows[0],
-    };
   } else {
     (req as any).auth = {
       kind: "local-admin",
@@ -103,8 +121,36 @@ app.use(async (req, res, next) => {
     role: string;
     id: string | null;
     all_accounts: boolean;
+    account_id?: string | null;
   };
   if (auth.kind === "local-admin") {
+    next();
+    return;
+  }
+  if (auth.kind === "device") {
+    if (
+      !auth.id ||
+      (!req.path.startsWith(`/devices/${auth.id}`) && req.path !== "/health")
+    ) {
+      res.status(403).json({ error: "Device token scope violation" });
+      return;
+    }
+    for (const value of [
+      req.query.account_id,
+      req.query.account,
+      req.params.account,
+      (req.body as any)?.account_id,
+      (req.body as any)?.expected_account_id,
+      (req.body as any)?.state?.bound_account,
+    ])
+      if (
+        typeof value === "string" &&
+        /^\d+$/.test(value) &&
+        value !== auth.account_id
+      ) {
+        res.status(403).json({ error: "Account is outside this device" });
+        return;
+      }
     next();
     return;
   }
@@ -170,6 +216,85 @@ app.use(async (req, res, next) => {
     }
   }
   next();
+});
+app.post("/devices/:device/pair", async (req, res) => {
+  const auth = (req as any).auth as {
+    kind: string;
+    role: string;
+  };
+  if (
+    auth.kind === "device" ||
+    (auth.kind === "client" && auth.role !== "admin")
+  ) {
+    res.status(403).json({ error: "Admin role required for device pairing" });
+    return;
+  }
+  const device = z.uuid().parse(req.params.device);
+  const account = z.string().regex(/^\d+$/).parse(req.body?.account_id);
+  await assertManagedAccountEnabled(pool, account);
+  const credential = randomBytes(32).toString("hex");
+  await pool.query(
+    `INSERT INTO device_credentials(
+       device_id,account_id,token_hash,enabled,created_at,last_used_at
+     ) VALUES($1,$2,$3,true,now(),now())
+     ON CONFLICT(device_id) DO UPDATE SET
+       account_id=excluded.account_id,
+       token_hash=excluded.token_hash,
+       enabled=true,
+       created_at=now(),
+       last_used_at=now()`,
+    [device, account, createHash("sha256").update(credential).digest("hex")],
+  );
+  await pool.query(
+    `INSERT INTO admin_audit_log(
+       id,actor_kind,actor_client_id,customer_id,action,target,details
+     ) VALUES($1,$2,$3,$4,'device_paired',$5,$6)`,
+    [
+      randomUUID(),
+      auth.kind,
+      auth.kind === "client" ? (req as any).auth.id : null,
+      (req as any).auth.customer_id ?? null,
+      device,
+      JSON.stringify({ account_id: account }),
+    ],
+  );
+  res.status(201).json({
+    device_id: device,
+    account_id: account,
+    credential,
+    notice: "Store this credential in the Extension only; it is shown once.",
+  });
+});
+app.post("/devices/:device/unpair", async (req, res) => {
+  const auth = (req as any).auth as {
+    kind: string;
+    role: string;
+  };
+  if (
+    auth.kind === "device" ||
+    (auth.kind === "client" && auth.role !== "admin")
+  ) {
+    res.status(403).json({ error: "Admin role required for device pairing" });
+    return;
+  }
+  const device = z.uuid().parse(req.params.device);
+  await pool.query(
+    "UPDATE device_credentials SET enabled=false,last_used_at=now() WHERE device_id=$1",
+    [device],
+  );
+  await pool.query(
+    `INSERT INTO admin_audit_log(
+       id,actor_kind,actor_client_id,customer_id,action,target,details
+     ) VALUES($1,$2,$3,$4,'device_unpaired',$5,'{}'::jsonb)`,
+    [
+      randomUUID(),
+      auth.kind,
+      auth.kind === "client" ? (req as any).auth.id : null,
+      (req as any).auth.customer_id ?? null,
+      device,
+    ],
+  );
+  res.json({ device_id: device, enabled: false });
 });
 app.use(dashboardRoutes(pool));
 app.use(accountManagementRoutes(pool));
