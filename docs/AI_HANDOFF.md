@@ -1,6 +1,9 @@
 # AI handoff และรูปแบบการพัฒนาระบบ
 
 งานล่าสุดที่ต้องอ่านก่อนเริ่มแก้:
+[HANDOFF_0.6.73_2026-11-19.md](HANDOFF_0.6.73_2026-11-19.md)
+
+Handoff ก่อนหน้า:
 [HANDOFF_OPTIMIZATION_2026-11-18.md](HANDOFF_OPTIMIZATION_2026-11-18.md)
 
 งาน Ads automation/Breakdown รอบล่าสุดมีรายละเอียดส่งต่อที่
