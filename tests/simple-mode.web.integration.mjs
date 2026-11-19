@@ -120,6 +120,9 @@ try {
   await expect(
     page.getByRole("button", { name: "ตรวจแผนที่รออนุมัติ" }),
   ).toBeVisible();
+  await expect(page.locator(".next-work .primary")).toHaveCount(1);
+  await expect(page.locator(".plain-actions")).toHaveCount(0);
+  await expect(page.locator(".context-bar")).toBeHidden();
   await expect(
     page.getByRole("button", { name: "ดูผลโฆษณา", exact: true }),
   ).toBeVisible();

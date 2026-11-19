@@ -520,6 +520,12 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
       (item) => item.status === "draft",
     )
       .length ?? 0;
+  const collecting = ds?.state.job?.status === "running";
+  const canStartCollection =
+    !!account &&
+    fresh &&
+    ds?.state.report_input === true &&
+    !collecting;
   const nextAction = !account
     ? {
         view: "accounts" as View,
@@ -535,13 +541,13 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
             "เปิด Ads Manager แล้วเชื่อมต่อ Extension เพื่อให้ระบบอ่านข้อมูลได้",
           button: "ดูวิธีเชื่อมต่อ",
         }
-      : (s?.ads ?? 0) === 0
+      : !ds?.state.report_input
         ? {
-            view: "reports" as View,
-            title: "ดึงข้อมูล Ads ครั้งแรก",
+            view: "settings" as View,
+            title: "เปิดสิทธิ์รายงานใน Extension",
             description:
-              "เริ่มจากรายงาน Ads ล่าสุด แล้วระบบจะแสดงผลและสิ่งที่ควรทำ",
-            button: "เปิดรายงาน Ads",
+              "เปิด popup แล้วเลือกเมาส์/คีย์บอร์ดรายงาน 15 นาที ระบบจึงจะเริ่มอ่าน Ads ได้",
+            button: "ดูวิธีเปิดสิทธิ์",
           }
         : draftPlans > 0
           ? {
@@ -561,11 +567,28 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
               }
             : {
                 view: "reports" as View,
-                title: "ตรวจผลโฆษณารอบล่าสุด",
+                title: collecting ? "กำลังอ่าน Ads" : "อ่าน Ads และวิเคราะห์",
                 description:
-                  "ดูภาพรวมผลงาน แล้วสร้างข้อเสนอใหม่เมื่อข้อมูลพร้อม",
-                button: "เปิดผลโฆษณา",
+                  collecting
+                    ? "ระบบกำลังเก็บข้อมูลจาก Ads Manager อยู่ เปิดหน้ารายงานเพื่อติดตาม"
+                    : "กดครั้งเดียวเพื่อเริ่มอ่าน Ads รอบใหม่ แล้วไปดูผลและงานที่ควรทำ",
+                button: collecting ? "ดูความคืบหน้า" : "เริ่มทำงาน",
               };
+  const runNextAction = () => {
+    if (nextAction.view !== "reports" || !canStartCollection) {
+      changeView(nextAction.view);
+      return;
+    }
+    void run("start-report", async () => {
+      await send({
+        command: "report.collect",
+        goal: "messages",
+        maxSteps: 20,
+        scan_columns: false,
+      });
+      changeView("reports");
+    });
+  };
   const error =
     health.error ?? bootstrap.error ?? deviceStatus.error ?? summary.error;
   return (
@@ -656,15 +679,17 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
                     ? "ระบบพร้อมใช้งาน"
                     : "กำลังเชื่อมต่อ"}
               </Pill>
-              <button
-                className="icon-button"
-                aria-label="รีเฟรชข้อมูล"
-                title="รีเฟรชข้อมูล"
-                disabled={!!busy}
-                onClick={() => void run("refresh", refresh)}
-              >
-                <Icon name="refresh" />
-              </button>
+              {advanced ? (
+                <button
+                  className="icon-button"
+                  aria-label="รีเฟรชข้อมูล"
+                  title="รีเฟรชข้อมูล"
+                  disabled={!!busy}
+                  onClick={() => void run("refresh", refresh)}
+                >
+                  <Icon name="refresh" />
+                </button>
+              ) : null}
               <button className="mobile-logout text-button" onClick={logout}>
                 ออก
               </button>
@@ -676,15 +701,17 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
                 <h1>{current.title}</h1>
                 <p className="muted">{current.description}</p>
               </div>
-              <a
-                className="button secondary"
-                href={`https://adsmanager.facebook.com/adsmanager/manage/campaigns${account ? "?act=" + account : ""}`}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <Icon name="external" />
-                เปิด Ads Manager
-              </a>
+              {advanced ? (
+                <a
+                  className="button secondary"
+                  href={`https://adsmanager.facebook.com/adsmanager/manage/campaigns${account ? "?act=" + account : ""}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Icon name="external" />
+                  เปิด Ads Manager
+                </a>
+              ) : null}
             </div>
             {error ? (
               <div role="alert" className="notice-error">
@@ -696,7 +723,11 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
                 ) : null}
               </div>
             ) : null}
-            <section className="context-bar" aria-label="เลือกบัญชีและอุปกรณ์">
+            <section
+              className="context-bar"
+              aria-label="เลือกบัญชีและอุปกรณ์"
+              hidden={!advanced}
+            >
               <div>
                 <label htmlFor="account">บัญชีที่กำลังดู</label>
                 <form
@@ -780,7 +811,8 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
                     <div className="button-group">
                       <button
                         className="primary"
-                        onClick={() => changeView(nextAction.view)}
+                        disabled={!!busy}
+                        onClick={runNextAction}
                       >
                         {nextAction.button}
                       </button>
@@ -845,7 +877,7 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
                   ))}
                 </section>
 
-                <div className="plain-actions">
+                {advanced ? <div className="plain-actions">
                   {[
                     {
                       view: "reports" as View,
@@ -878,7 +910,7 @@ function Dashboard({ token, logout }: { token: string; logout: () => void }) {
                       <b aria-hidden="true">›</b>
                     </button>
                   ))}
-                </div>
+                </div> : null}
 
                 <details className="technical-overview">
                   <summary>รายละเอียดการเชื่อมต่อและจำนวนข้อมูล</summary>

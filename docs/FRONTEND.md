@@ -58,6 +58,11 @@ npm run start:web
 จากการเชื่อมต่อ, จำนวน Ads, ข้อเสนอใหม่ และแผนที่รออนุมัติ จากนั้นจึงแสดงทางลัด
 สำหรับงานหลักและซ่อนรายละเอียดระบบไว้ใน disclosure
 
+โหมดง่ายแสดง action หลักเพียงปุ่มเดียว. ถ้า Extension/lease พร้อม ปุ่ม “เริ่มทำงาน”
+จะส่ง `report.collect` แล้วพาไปหน้ารายงานทันที; ถ้ายังไม่พร้อมจะพาไปขั้นที่ต้องทำ.
+Account/device picker, refresh, Ads Manager shortcut และ shortcut cards
+จะแสดงเฉพาะ Advanced mode เพื่อลดจำนวนปุ่มบนหน้าเริ่มต้น
+
 หน้า **ข้อมูลและส่งออก** แสดง Data Lifecycle Policy, จำนวน Ads Catalog,
 Daily retention, Raw Capture และ Monthly rollups. ปุ่ม “ตรวจแผนลบข้อมูล”
 เรียก dry-run เท่านั้น; การ apply จริงทำผ่าน CLI หลังตรวจผลและ backup
