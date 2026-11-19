@@ -1620,10 +1620,15 @@ export async function prepareReportWithInput(
     attached = true;
     phase = "inspect_table";
     const initialHeaders = await probe("table_headers");
-    const dialogClosed = options.reuseIfReady
-      ? await probe("closed")
-      : null;
-    if (options.reuseIfReady && dialogClosed?.kind === "done") {
+    const dialogClosed = await probe("closed");
+    record({
+      op: "closed",
+      phase,
+      kind: dialogClosed.kind,
+      reason:
+        "reason" in dialogClosed ? dialogClosed.reason : undefined,
+    });
+    if (dialogClosed?.kind === "done") {
       const headers = initialHeaders.headers ?? [];
       const missingRendered = fields
         .filter(

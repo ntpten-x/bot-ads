@@ -2,7 +2,7 @@
 
 Chrome Extension สำหรับอ่านข้อมูลและควบคุม Meta Business Suite / Ads Manager ผ่านหน้าเว็บ + Backend รับคำสั่งบอทในเครื่อง + PostgreSQL
 
-**สถานะ:** source/build Extension 0.6.71 รองรับ one-click `report.collect` พร้อม fast refresh, receipt แยก command/collection, job-level materialization, paged export, daily trend aggregation, CSV และรายงาน Ads แบบ manual-first ระบบยืนยัน coverage ได้เฉพาะ scope ที่มีหลักฐานครบ ไม่ได้แปลว่าครบทั้งบัญชีหรือมีการสร้าง/เผยแพร่โฆษณาจริง
+**สถานะ:** source/build Extension 0.6.72 รองรับ one-click `report.collect` พร้อม fast refresh, receipt แยก command/collection, job-level materialization, paged export, daily trend aggregation, CSV และรายงาน Ads แบบ manual-first ระบบยืนยัน coverage ได้เฉพาะ scope ที่มีหลักฐานครบ ไม่ได้แปลว่าครบทั้งบัญชีหรือมีการสร้าง/เผยแพร่โฆษณาจริง
 
 **สำหรับ AI ที่ทำงานต่อ:** เริ่มอ่าน [AGENTS.md](AGENTS.md) และ [คู่มือส่งต่องานและรูปแบบการพัฒนา](docs/AI_HANDOFF.md) ซึ่งรวมโครงสร้างระบบ วิธีรัน ข้อกำหนดข้อมูล วิธีทดสอบ และงานค้าง
 

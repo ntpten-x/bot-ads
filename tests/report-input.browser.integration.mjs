@@ -76,6 +76,22 @@ await withReportInputFixture(
     ).not.toContain("Purchases");
     expect(result.rendered_headers).toContain("Amount spent ↓");
 
+    const trustedBeforeRepeat = await meta.evaluate(
+      () => window.trustedEvents,
+    );
+    const repeated = await worker.evaluate(
+      (current) =>
+        TrustedReportFixture.prepareReportWithInput(current, "messages"),
+      binding,
+    );
+    phase("repeat-prepare-finished");
+    expect(repeated.ok, JSON.stringify(repeated)).toBe(true);
+    expect(repeated.reused).toBe(true);
+    expect(await meta.evaluate(() => window.trustedEvents)).toBe(
+      trustedBeforeRepeat,
+    );
+    expect(await meta.locator("#dialog").isHidden()).toBe(true);
+
     const trustedBeforeReuse = await meta.evaluate(
       () => window.trustedEvents,
     );

@@ -1967,6 +1967,24 @@ blocked the Columns trigger underneath it. `0.6.70` reuses the already-open
 dialog directly and does not click the blocked trigger. The open-dialog fixture
 passes with dialog close, column validation and no publish action.
 
+## Repeated column preparation — 0.6.72
+
+Re-running `report.prepare` after a successful column setup could reopen the
+customization dialog even though all blocking columns were already rendered and
+no extra headers remained. Meta disabled Save when there was nothing to change,
+so the repeated command could not complete.
+
+`0.6.72` checks `probe("closed")` on every preparation call, not only calls that
+opt into `reuseIfReady`. When the dialog is closed, rendered headers contain all
+blocking fields and no extra headers, the existing table view is returned with
+`reused=true` without trusted search, checkbox or Save input. If the dialog is
+already open, the existing guarded prune/verify/Save path remains active.
+
+The trusted report-input fixture now prepares the same `messages` view twice
+without `reuseIfReady` and verifies `ok=true`, `reused=true`, a closed dialog and
+no additional trusted events. The lease gate, column pruning, stale-header
+rejection and open-dialog recovery fixtures also pass.
+
 ## Data lifecycle validation — 19 Nov 2026
 
 Migration `014_data_lifecycle` was applied locally without deleting existing

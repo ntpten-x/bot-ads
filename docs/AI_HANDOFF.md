@@ -9,7 +9,7 @@
 สถานะรวมถึง CSV-first reconciliation และ source separation ณ 17 พฤศจิกายน 2026 อยู่ที่
 [HANDOFF_ADS_ANALYSIS_2026-11-17.md](HANDOFF_ADS_ANALYSIS_2026-11-17.md)
 
-เอกสารส่งต่องาน ณ 19 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.71 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
+เอกสารส่งต่องาน ณ 19 พฤศจิกายน 2026 อ้างอิง source/build Extension 0.6.72 ให้ตรวจ source และ package scripts ทุกครั้งก่อนใช้ เพราะเวอร์ชันแต่ละ package อาจต่างกัน
 
 Data lifecycle ล่าสุดอยู่ที่ [DATA_LIFECYCLE.md](DATA_LIFECYCLE.md): catalog Ads,
 status history, monthly rollups, raw retention, dry-run CLI/API และ policy
@@ -418,3 +418,12 @@ the gridless layout. The attribution-aware scope contained 31 Ads, all
 recommendation. Remaining work is vertical paging:
 `reporting_view_changed_before_input` stopped after the initial viewport, so the
 run covers only part of the 794 reported Ads.
+
+Extension `0.6.72` makes rendered-header reuse unconditional when the
+customization dialog is closed. A repeated `report.prepare` no longer opens an
+already-configured column view merely because the caller omitted
+`reuseIfReady`; Meta therefore does not reach the state where an unchanged
+dialog has no Save action. If the dialog is already open, the guarded
+prune/verify/Save path from `0.6.70` still applies. Fixture validation is
+recorded in [VALIDATION.md](VALIDATION.md); live Meta acceptance requires
+reloading Extension `0.6.72`.
